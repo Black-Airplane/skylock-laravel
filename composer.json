@@ -1,0 +1,61 @@
+{
+    "name": "blackairplane/skylock-laravel",
+    "description": "Reports a Laravel app's health and scheduled tasks to SkyLock, Black Airplane's monitoring platform.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "monitoring", "health", "scheduler", "uptime", "skylock"],
+    "homepage": "https://getskylock.com",
+    "authors": [
+        {
+            "name": "Black Airplane",
+            "homepage": "https://blackairplane.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/Black-Airplane/skylock-laravel/issues",
+        "source": "https://github.com/Black-Airplane/skylock-laravel",
+        "security": "https://github.com/Black-Airplane/skylock-laravel/security/policy"
+    },
+    "require": {
+        "php": "^8.2",
+        "illuminate/console": "^11.0|^12.0|^13.0",
+        "illuminate/http": "^11.0|^12.0|^13.0",
+        "illuminate/support": "^11.0|^12.0|^13.0"
+    },
+    "require-dev": {
+        "larastan/larastan": "^3.0",
+        "laravel/pint": "^1.18",
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "pestphp/pest": "^3.0|^4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "BlackAirplane\\SkyLockReporter\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "BlackAirplane\\SkyLockReporter\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "BlackAirplane\\SkyLockReporter\\SkyLockReporterServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "lint": "pint --test",
+        "analyse": "phpstan analyse --memory-limit=1G"
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
