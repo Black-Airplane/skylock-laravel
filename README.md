@@ -4,7 +4,7 @@ Reports a Laravel app's health and scheduled tasks to [SkyLock](https://getskylo
 
 ## Requirements
 
-PHP 8.2 or later and Laravel 11, 12 or 13, with the scheduler running (`schedule:run` every minute, as Laravel's own docs set it up).
+PHP 8.2 or later and Laravel 12 or 13, with the scheduler running (`schedule:run` every minute, as Laravel's own docs set it up).
 
 ## Install
 
