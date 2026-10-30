@@ -38,10 +38,21 @@ Only these, and nothing else:
   - Failed jobs in the last hour.
   - Disk used, as a percentage.
   - Results from [spatie/laravel-health](https://github.com/spatie/laravel-health), if it's installed: name and status only.
+- **What the app runs on, when it changes** (worked out at most once an hour; SkyLock asks for it when it doesn't have the latest):
+  - The operating system's ID and version (`ubuntu`, `22.04`) and whether it's a container.
+  - On Debian and Ubuntu: how many security updates are waiting (the count update-notifier keeps), whether a restart is needed to finish installing updates, whether security updates install themselves, and whether Ubuntu Pro's extended support is on.
+  - The PHP running the scheduler, and the PHP serving web requests (about one web request in 500 notes its version after the response has gone; set `SKYLOCK_REPORTER_WEB_RUNTIME=false` to turn that off).
+  - Laravel's version; the default database's product and version (`mysql`, `8.0.36`); Redis or Valkey's version when the cache, queue or sessions use it.
+  - The deployed commit (`SKYLOCK_COMMIT`, a platform's own variable, or the git checkout).
+  - The hosting, from a fixed list (`laravel-cloud`, `forge`, `vapor`, `render`…).
+  - A server key: a hash of the machine id, the same for every app on the server, so SkyLock can tell which apps share one. The machine id itself never leaves the server.
+  - Whether an error monitor (Sentry, Bugsnag, Flare, Honeybadger, Rollbar, Nightwatch) is configured: one boolean.
+
+  It reads plain files and asks PHP and the app's own connections; it never runs a command. Anything it can't read is sent as nothing.
 - **When your schedule changes:** each scheduled task's cron expression, time zone, a label (its `->description()`, or just the command's name, such as `backup:run`) and a key that's a hash of its full command.
 - **When a scheduled task starts, finishes or fails:** its key, and how long it took.
 
-It never sends error messages, exception text, hosts, queries, environment values, command arguments or anything a user entered. A report that can't get through is dropped after three seconds; the reporter never throws, and it never slows your app down.
+It never sends error messages, exception text, hostnames, addresses, connection names, queries, environment variables (names or values), command arguments or anything a user entered. A report that can't get through is dropped after three seconds; the reporter never throws, and it never slows your app down.
 
 ## Commands
 

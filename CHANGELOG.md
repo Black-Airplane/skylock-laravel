@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- What the app runs on, sent when it changes: the operating system and, on Debian and Ubuntu, waiting security updates, a pending restart, automatic updates and Ubuntu Pro; the PHP running the scheduler and the PHP serving web requests; Laravel, the default database and Redis or Valkey; the deployed commit; the hosting; a server key (a hash, never the machine id); and whether an error monitor is configured. SkyLock uses it for BA-RUN-001, BA-RUN-002 and BA-MON-001. Older SkyLocks never ask for it.
+- About one web request in 500 notes which PHP served it, after the response has gone, with one cache write. `SKYLOCK_REPORTER_WEB_RUNTIME=false` turns it off. It never runs commands.
+- `skylock:test` shows the stack it would send, and sends it.
+
 ## 0.2.0
 
 - The minute report also says whether debug mode is on and whether the app thinks it's running in production: two booleans from `APP_DEBUG` and `APP_ENV`, never their values. SkyLock uses them for BA-SUR-003 (debug mode is off in production). SkyLock 0.1 reporters keep working; their apps show this as not measured.
