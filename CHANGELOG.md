@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+- The minute report also says whether debug mode is on and whether the app thinks it's running in production: two booleans from `APP_DEBUG` and `APP_ENV`, never their values. SkyLock uses them for BA-SUR-003 (debug mode is off in production). SkyLock 0.1 reporters keep working; their apps show this as not measured.
+
 ## 0.1.0
 
 The first release.

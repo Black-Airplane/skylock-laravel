@@ -27,12 +27,7 @@ class TestCommand extends Command
             isset($result['value']) ? $result['value'].' '.($result['unit'] ?? '') : '',
         ], $results));
 
-        $sent = $client->send('POST', 'health', [
-            'phpVersion' => PHP_VERSION,
-            'laravelVersion' => app()->version(),
-            'packageVersion' => ReportCommand::packageVersion(),
-            'checks' => $results,
-        ]);
+        $sent = $client->send('POST', 'health', ReportCommand::payload($results));
 
         if ($sent === null) {
             $this->components->error('SkyLock didn\'t accept the report. Check SKYLOCK_REPORTER_URL and SKYLOCK_REPORTER_TOKEN, and the log.');
