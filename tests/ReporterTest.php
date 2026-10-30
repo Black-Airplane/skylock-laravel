@@ -64,3 +64,17 @@ it('never breaks the app when SkyLock can’t be reached, and does nothing witho
     $this->artisan('skylock:sync-schedule')->assertFailed();
     $this->artisan('skylock:test')->assertFailed();
 });
+
+it('says whether debug mode is on and whether the app is in production, never the values themselves', function () {
+    reporterConfigured();
+    config(['app.debug' => true, 'app.key' => 'base64:sentinel-app-key']);
+    Http::fake(['*' => Http::response(['accepted' => true, 'scheduleKnown' => true], 202)]);
+
+    $this->artisan('skylock:report')->assertSuccessful();
+
+    Http::assertSent(fn (Request $request): bool => $request->url() === 'https://skylock.example/api/ingest/health'
+        && $request['debug'] === true
+        && $request['production'] === false
+        && array_keys($request->data()) === ['phpVersion', 'laravelVersion', 'packageVersion', 'debug', 'production', 'checks']
+        && ! str_contains($request->body(), 'sentinel-app-key'));
+});

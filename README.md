@@ -31,7 +31,7 @@ That's all. The app's scheduler already runs `schedule:run` every minute, and th
 
 Only these, and nothing else:
 
-- **Every minute:** your PHP, Laravel and package versions, and a list of health checks, each a name, a status (pass, warn or fail) and sometimes a number with a unit:
+- **Every minute:** your PHP, Laravel and package versions; whether debug mode is on and whether the app thinks it's running in production (two booleans, from `APP_DEBUG` and `APP_ENV`, never their values); and a list of health checks, each a name, a status (pass, warn or fail) and sometimes a number with a unit:
   - Database: can it run `select 1`.
   - Cache: can it write and read a value.
   - Queue size, and the oldest waiting job (database queues).

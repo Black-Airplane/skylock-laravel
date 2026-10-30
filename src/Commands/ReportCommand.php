@@ -25,12 +25,7 @@ class ReportCommand extends Command
             return self::SUCCESS;
         }
 
-        $response = $client->send('POST', 'health', [
-            'phpVersion' => PHP_VERSION,
-            'laravelVersion' => app()->version(),
-            'packageVersion' => self::packageVersion(),
-            'checks' => $checks->run(),
-        ]);
+        $response = $client->send('POST', 'health', self::payload($checks->run()));
 
         // Send the schedule when it changed, or when SkyLock doesn't have it yet.
         $tasks = ScheduledTasks::all($schedule);
@@ -42,6 +37,25 @@ class ReportCommand extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * The minute report: versions, two booleans about the app's own settings
+     * (never the values themselves) and the health checks.
+     *
+     * @param  list<array<string, mixed>>  $checks
+     * @return array<string, mixed>
+     */
+    public static function payload(array $checks): array
+    {
+        return [
+            'phpVersion' => PHP_VERSION,
+            'laravelVersion' => app()->version(),
+            'packageVersion' => self::packageVersion(),
+            'debug' => config('app.debug') === true,
+            'production' => app()->isProduction(),
+            'checks' => $checks,
+        ];
     }
 
     public static function packageVersion(): string
