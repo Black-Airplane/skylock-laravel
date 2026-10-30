@@ -5,6 +5,7 @@ namespace BlackAirplane\SkyLockReporter\Commands;
 use BlackAirplane\SkyLockReporter\HealthChecks;
 use BlackAirplane\SkyLockReporter\SkyLockClient;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Cache;
 
 class TestCommand extends Command
 {
@@ -27,7 +28,18 @@ class TestCommand extends Command
             isset($result['value']) ? $result['value'].' '.($result['unit'] ?? '') : '',
         ], $results));
 
-        $sent = $client->send('POST', 'health', ReportCommand::payload($results));
+        Cache::forget('skylock-reporter:stack');
+        $stack = ReportCommand::stack();
+        $this->table(['What it runs on', 'Sent as'], array_map(
+            fn (string $key, mixed $value): array => [$key, is_scalar($value) || $value === null ? var_export($value, true) : (string) json_encode($value)],
+            array_keys($stack),
+            $stack,
+        ));
+
+        $sent = $client->send('POST', 'health', [...ReportCommand::payload($results), 'stackHash' => ReportCommand::hash($stack)]);
+        if ($sent !== null && array_key_exists('stackKnown', $sent)) {
+            $client->send('PUT', 'stack', $stack);
+        }
 
         if ($sent === null) {
             $this->components->error('SkyLock didn\'t accept the report. Check SKYLOCK_REPORTER_URL and SKYLOCK_REPORTER_TOKEN, and the log.');

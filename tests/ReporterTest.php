@@ -75,6 +75,6 @@ it('says whether debug mode is on and whether the app is in production, never th
     Http::assertSent(fn (Request $request): bool => $request->url() === 'https://skylock.example/api/ingest/health'
         && $request['debug'] === true
         && $request['production'] === false
-        && array_keys($request->data()) === ['phpVersion', 'laravelVersion', 'packageVersion', 'debug', 'production', 'checks']
+        && array_keys($request->data()) === ['phpVersion', 'laravelVersion', 'packageVersion', 'debug', 'production', 'checks', 'stackHash']
         && ! str_contains($request->body(), 'sentinel-app-key'));
 });

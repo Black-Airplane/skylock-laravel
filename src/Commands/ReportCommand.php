@@ -5,6 +5,7 @@ namespace BlackAirplane\SkyLockReporter\Commands;
 use BlackAirplane\SkyLockReporter\HealthChecks;
 use BlackAirplane\SkyLockReporter\ScheduledTasks;
 use BlackAirplane\SkyLockReporter\SkyLockClient;
+use BlackAirplane\SkyLockReporter\Stack;
 use Composer\InstalledVersions;
 use Illuminate\Console\Command;
 use Illuminate\Console\Scheduling\Schedule;
@@ -25,7 +26,13 @@ class ReportCommand extends Command
             return self::SUCCESS;
         }
 
-        $response = $client->send('POST', 'health', self::payload($checks->run()));
+        $stack = self::stack();
+        $response = $client->send('POST', 'health', [...self::payload($checks->run()), 'stackHash' => self::hash($stack)]);
+
+        // What it runs on changes rarely: sent when it does, or when SkyLock asks.
+        if ($response !== null && ($response['stackKnown'] ?? true) !== true) {
+            $client->send('PUT', 'stack', $stack);
+        }
 
         // Send the schedule when it changed, or when SkyLock doesn't have it yet.
         $tasks = ScheduledTasks::all($schedule);
@@ -56,6 +63,30 @@ class ReportCommand extends Command
             'production' => app()->isProduction(),
             'checks' => $checks,
         ];
+    }
+
+    /**
+     * What the app runs on, worked out at most once an hour.
+     *
+     * @return array<string, mixed>
+     */
+    public static function stack(): array
+    {
+        try {
+            $stack = Cache::remember('skylock-reporter:stack', 3600, fn (): array => Stack::collect());
+        } catch (Throwable) {
+            $stack = null;
+        }
+
+        return is_array($stack) ? $stack : Stack::collect();
+    }
+
+    /**
+     * @param  array<string, mixed>  $stack
+     */
+    public static function hash(array $stack): string
+    {
+        return sha1((string) json_encode($stack));
     }
 
     public static function packageVersion(): string

@@ -27,6 +27,10 @@ class SkyLockReporterServiceProvider extends ServiceProvider
         $this->publishes([__DIR__.'/../config/skylock-reporter.php' => config_path('skylock-reporter.php')], 'skylock-reporter');
 
         if (! $this->app->runningInConsole()) {
+            if ($this->app->make(SkyLockClient::class)->configured()) {
+                WebRuntime::register($this->app);
+            }
+
             return;
         }
 

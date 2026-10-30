@@ -25,4 +25,15 @@ return [
 
     // Seconds to wait for SkyLock. The reporter never slows the app down for longer.
     'timeout' => 3,
+
+    /*
+    | About one web request in 500 notes which PHP served it, after the
+    | response has gone, so SkyLock knows the web PHP as well as the
+    | scheduler's. Set to false to keep the package out of web requests.
+    */
+
+    'web_runtime' => env('SKYLOCK_REPORTER_WEB_RUNTIME', true),
+
+    // The deployed commit, when the app doesn't run from a git checkout and the platform doesn't say.
+    'commit' => env('SKYLOCK_COMMIT'),
 ];
