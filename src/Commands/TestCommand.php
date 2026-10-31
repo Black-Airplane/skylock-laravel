@@ -5,7 +5,6 @@ namespace BlackAirplane\SkyLockReporter\Commands;
 use BlackAirplane\SkyLockReporter\HealthChecks;
 use BlackAirplane\SkyLockReporter\SkyLockClient;
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\Cache;
 
 class TestCommand extends Command
 {
@@ -28,17 +27,17 @@ class TestCommand extends Command
             isset($result['value']) ? $result['value'].' '.($result['unit'] ?? '') : '',
         ], $results));
 
-        Cache::forget('skylock-reporter:stack');
-        $stack = ReportCommand::stack();
+        $read = ReportCommand::stack(fresh: true);
+        $stack = $read['stack'];
         $this->table(['What it runs on', 'Sent as'], array_map(
             fn (string $key, mixed $value): array => [$key, is_scalar($value) || $value === null ? var_export($value, true) : (string) json_encode($value)],
             array_keys($stack),
             $stack,
         ));
 
-        $sent = $client->send('POST', 'health', [...ReportCommand::payload($results), 'stackHash' => ReportCommand::hash($stack)]);
+        $sent = $client->send('POST', 'health', [...ReportCommand::payload($results), 'stackHash' => ReportCommand::hash($stack), 'stackCollectedAt' => $read['collectedAt']]);
         if ($sent !== null && array_key_exists('stackKnown', $sent)) {
-            $client->send('PUT', 'stack', $stack);
+            $client->send('PUT', 'stack', ReportCommand::stackPayload($read));
         }
 
         if ($sent === null) {

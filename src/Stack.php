@@ -78,6 +78,27 @@ final class Stack
     }
 
     /**
+     * Changes with every deploy, so what the app runs on is read again after
+     * one rather than up to an hour later. Only ever part of a cache key:
+     * none of it leaves the app.
+     */
+    public static function deployFingerprint(): string
+    {
+        $mtime = fn (string $path): int|false => is_file($path) ? filemtime($path) : false;
+
+        return sha1((string) json_encode([
+            self::attempt(self::commit(...)),
+            getenv('LARAVEL_CLOUD_DEPLOY_UUID'),
+            getenv('FORGE_DEPLOY_COMMIT'),
+            getenv('VAPOR_COMMIT_HASH'),
+            // A deploy builds the dependencies and caches the config again,
+            // and a changed environment variable means a new deploy.
+            $mtime(base_path('vendor/composer/installed.php')),
+            $mtime(app()->getCachedConfigPath()),
+        ]));
+    }
+
+    /**
      * @return array{type: string, id: string|null, version: string|null, container: bool}
      */
     private static function os(): array
@@ -260,7 +281,12 @@ final class Stack
         return preg_match('/^[0-9a-f]{32}$/', $machine) === 1 ? hash_hmac('sha256', 'skylock-reporter', $machine) : null;
     }
 
-    private static function errorMonitoring(): bool
+    /**
+     * Whether an error monitor is configured: a few config lookups, so the
+     * minute report asks it every time and a deploy that adds one shows
+     * within a minute.
+     */
+    public static function errorMonitoring(): bool
     {
         foreach (self::ERROR_MONITORS as $key) {
             $value = config($key);

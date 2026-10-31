@@ -130,3 +130,49 @@ it('sends the stack only when SkyLock asks for it', function () {
         && $request['php']['cli'] === PHP_VERSION);
     Http::assertSent(fn (Request $request): bool => str_ends_with($request->url(), '/health') && preg_match('/^[0-9a-f]{40}$/', (string) $request['stackHash']) === 1);
 });
+
+it('says every minute whether an error monitor is configured, and when it last read what the app runs on', function () {
+    reporterConfigured();
+    $this->travelTo(now()->setDate(2026, 11, 2)->setTime(12, 0)->utc());
+    Http::fake(['*' => Http::response(['accepted' => true, 'scheduleKnown' => true, 'stackKnown' => true], 202)]);
+
+    $this->artisan('skylock:report')->assertSuccessful();
+    config(['nightwatch.token' => 'nw_secret_token']);
+    $this->travelTo(now()->addMinute());
+    $this->artisan('skylock:report')->assertSuccessful();
+
+    $health = Http::recorded(fn (Request $request): bool => str_ends_with($request->url(), '/health'))->map(fn (array $pair) => $pair[0])->values();
+    expect($health->map(fn (Request $request) => $request['errorMonitoring'])->all())->toBe([false, true])
+        // What it runs on is still the copy read at 12:00; the monitor isn't.
+        ->and($health->map(fn (Request $request) => $request['stackCollectedAt'])->unique()->values()->all())->toBe(['2026-11-02T12:00:00+00:00'])
+        ->and($health->every(fn (Request $request): bool => ! str_contains($request->body(), 'nw_secret_token')))->toBeTrue();
+});
+
+it('reads what the app runs on again after a deploy', function () {
+    reporterConfigured();
+    $before = Stack::deployFingerprint();
+    config(['skylock-reporter.commit' => str_repeat('a', 40)]);
+
+    expect(Stack::deployFingerprint())->not->toBe($before)
+        ->and(Stack::deployFingerprint())->toMatch('/^[0-9a-f]{40}$/');
+});
+
+it('reads what the app runs on again, and sends it, when SkyLock asks', function () {
+    reporterConfigured();
+    $this->travelTo(now()->setDate(2026, 11, 2)->setTime(12, 0)->utc());
+    Http::fake([
+        'skylock.example/api/ingest/health' => Http::sequence()
+            ->push(['accepted' => true, 'scheduleKnown' => true, 'stackKnown' => true], 202)
+            ->push(['accepted' => true, 'scheduleKnown' => true, 'stackKnown' => true, 'refreshStack' => true], 202),
+        'skylock.example/api/ingest/stack' => Http::response(['accepted' => true], 202),
+    ]);
+
+    $this->artisan('skylock:report')->assertSuccessful();
+    $this->travelTo(now()->addMinutes(5));
+    $this->artisan('skylock:report')->assertSuccessful();
+
+    $stacks = Http::recorded(fn (Request $request): bool => str_ends_with($request->url(), '/stack'));
+    expect($stacks)->toHaveCount(1)
+        ->and($stacks->first()[0]['collectedAt'])->toBe('2026-11-02T12:05:00+00:00')
+        ->and($stacks->first()[0]['schema'])->toBe(1);
+});

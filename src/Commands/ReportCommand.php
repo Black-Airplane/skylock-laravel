@@ -18,6 +18,9 @@ class ReportCommand extends Command
 
     protected $description = 'Send this app\'s health to SkyLock (runs every minute from the scheduler)';
 
+    /** How long what the app runs on is kept before it's read again, when nothing is deployed. */
+    public const STACK_SECONDS = 3600;
+
     public function handle(SkyLockClient $client, HealthChecks $checks, Schedule $schedule): int
     {
         if (! $client->configured()) {
@@ -26,12 +29,20 @@ class ReportCommand extends Command
             return self::SUCCESS;
         }
 
-        $stack = self::stack();
-        $response = $client->send('POST', 'health', [...self::payload($checks->run()), 'stackHash' => self::hash($stack)]);
+        $read = self::stack();
+        $response = $client->send('POST', 'health', [
+            ...self::payload($checks->run()),
+            'stackHash' => self::hash($read['stack']),
+            'stackCollectedAt' => $read['collectedAt'],
+        ]);
 
-        // What it runs on changes rarely: sent when it does, or when SkyLock asks.
-        if ($response !== null && ($response['stackKnown'] ?? true) !== true) {
-            $client->send('PUT', 'stack', $stack);
+        // What it runs on changes rarely: sent when it does or when SkyLock doesn't have it,
+        // and read again first when someone has asked SkyLock to check now.
+        if ($response !== null && ($response['refreshStack'] ?? false) === true) {
+            $read = self::stack(fresh: true);
+            $client->send('PUT', 'stack', self::stackPayload($read));
+        } elseif ($response !== null && ($response['stackKnown'] ?? true) !== true) {
+            $client->send('PUT', 'stack', self::stackPayload($read));
         }
 
         // Send the schedule when it changed, or when SkyLock doesn't have it yet.
@@ -47,8 +58,8 @@ class ReportCommand extends Command
     }
 
     /**
-     * The minute report: versions, two booleans about the app's own settings
-     * (never the values themselves) and the health checks.
+     * The minute report: versions, three booleans about the app's own
+     * settings (never the values themselves) and the health checks.
      *
      * @param  list<array<string, mixed>>  $checks
      * @return array<string, mixed>
@@ -61,28 +72,54 @@ class ReportCommand extends Command
             'packageVersion' => self::packageVersion(),
             'debug' => config('app.debug') === true,
             'production' => app()->isProduction(),
+            'errorMonitoring' => Stack::errorMonitoring(),
             'checks' => $checks,
         ];
     }
 
     /**
-     * What the app runs on, worked out at most once an hour.
+     * What the app runs on, and when it was read: at most once an hour,
+     * again after every deploy, and straight away when SkyLock asks.
      *
-     * @return array<string, mixed>
+     * @return array{collectedAt: string, stack: array<mixed>}
      */
-    public static function stack(): array
+    public static function stack(bool $fresh = false): array
     {
         try {
-            $stack = Cache::remember('skylock-reporter:stack', 3600, fn (): array => Stack::collect());
-        } catch (Throwable) {
-            $stack = null;
-        }
+            $key = 'skylock-reporter:stack:'.Stack::deployFingerprint();
+            $cached = $fresh ? null : Cache::get($key);
+            if (is_array($cached) && is_array($cached['stack'] ?? null) && is_string($cached['collectedAt'] ?? null)) {
+                return ['collectedAt' => $cached['collectedAt'], 'stack' => $cached['stack']];
+            }
 
-        return is_array($stack) ? $stack : Stack::collect();
+            $read = self::read();
+            Cache::put($key, $read, self::STACK_SECONDS);
+
+            return $read;
+        } catch (Throwable) {
+            return self::read();
+        }
     }
 
     /**
-     * @param  array<string, mixed>  $stack
+     * @return array{collectedAt: string, stack: array<mixed>}
+     */
+    private static function read(): array
+    {
+        return ['collectedAt' => now()->utc()->toIso8601String(), 'stack' => Stack::collect()];
+    }
+
+    /**
+     * @param  array{collectedAt: string, stack: array<mixed>}  $read
+     * @return array<mixed>
+     */
+    public static function stackPayload(array $read): array
+    {
+        return [...$read['stack'], 'collectedAt' => $read['collectedAt']];
+    }
+
+    /**
+     * @param  array<mixed>  $stack
      */
     public static function hash(array $stack): string
     {
