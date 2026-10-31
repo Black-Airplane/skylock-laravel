@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.1
+
+- A task that repeats within the minute (`everyFifteenSeconds()` and the like) is reported for its first run each minute, every failure, and the first success after one, instead of every run. SkyLock judges lateness by the minute, so the other runs told it nothing; a 15-second task sent 11,520 requests a day and now sends about 2,880.
+- Task events are sent from inside the scheduler, before and after each task, and each could wait three seconds for an unreachable SkyLock. Now, after one doesn't get through, tasks that run again within two minutes skip SkyLock for a minute; their next run reports them, well inside SkyLock's five minutes' grace. Failures, and tasks that run less often, are always sent, because missing them would leave SkyLock wrong until their next run.
+- Nothing changes for SkyLock: it receives the same events, fewer of them.
+
 ## 0.3.0
 
 - What the app runs on, sent when it changes: the operating system and, on Debian and Ubuntu, waiting security updates, a pending restart, automatic updates and Ubuntu Pro; the PHP running the scheduler and the PHP serving web requests; Laravel, the default database and Redis or Valkey; the deployed commit; the hosting; a server key (a hash, never the machine id); and whether an error monitor is configured. SkyLock uses it for BA-RUN-001, BA-RUN-002 and BA-MON-001. Older SkyLocks never ask for it.

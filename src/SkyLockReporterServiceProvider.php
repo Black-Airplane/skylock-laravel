@@ -20,6 +20,8 @@ class SkyLockReporterServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/skylock-reporter.php', 'skylock-reporter');
         $this->app->singleton(SkyLockClient::class);
+        // One per process: it remembers what this scheduler run has sent.
+        $this->app->singleton(TaskEvents::class);
     }
 
     public function boot(): void
@@ -56,6 +58,9 @@ class SkyLockReporterServiceProvider extends ServiceProvider
         return $task->exitCode !== null && $task->exitCode !== 0;
     }
 
+    /**
+     * @param  'starting'|'finished'|'failed'  $event
+     */
     private function task(Event $task, string $event, ?int $durationMs = null): void
     {
         if (ScheduledTasks::isOwn($task) || ($event === 'finished' && $task->runInBackground && $durationMs !== null)) {
@@ -63,10 +68,6 @@ class SkyLockReporterServiceProvider extends ServiceProvider
             return;
         }
 
-        $this->app->make(SkyLockClient::class)->send('POST', 'task-events', array_filter([
-            'key' => ScheduledTasks::key($task),
-            'event' => $event,
-            'durationMs' => $durationMs,
-        ], fn ($value) => $value !== null));
+        $this->app->make(TaskEvents::class)->send($task, $event, $durationMs);
     }
 }
