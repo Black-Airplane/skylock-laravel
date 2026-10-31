@@ -31,14 +31,14 @@ That's all. The app's scheduler already runs `schedule:run` every minute, and th
 
 Only these, and nothing else:
 
-- **Every minute:** your PHP, Laravel and package versions; whether debug mode is on and whether the app thinks it's running in production (two booleans, from `APP_DEBUG` and `APP_ENV`, never their values); and a list of health checks, each a name, a status (pass, warn or fail) and sometimes a number with a unit:
+- **Every minute:** your PHP, Laravel and package versions; whether debug mode is on and whether the app thinks it's running in production (two booleans, from `APP_DEBUG` and `APP_ENV`, never their values); whether an error monitor is configured (one boolean); when it last read what the app runs on; and a list of health checks, each a name, a status (pass, warn or fail) and sometimes a number with a unit:
   - Database: can it run `select 1`.
   - Cache: can it write and read a value.
   - Queue size, and the oldest waiting job (database queues).
   - Failed jobs in the last hour.
   - Disk used, as a percentage.
   - Results from [spatie/laravel-health](https://github.com/spatie/laravel-health), if it's installed: name and status only.
-- **What the app runs on, when it changes** (worked out at most once an hour; SkyLock asks for it when it doesn't have the latest):
+- **What the app runs on, when it changes** (read at most once an hour, again after every deploy, and straight away when someone asks SkyLock to check again; SkyLock asks for it when it doesn't have the latest):
   - The operating system's ID and version (`ubuntu`, `22.04`) and whether it's a container.
   - On Debian and Ubuntu: how many security updates are waiting (the count update-notifier keeps), whether a restart is needed to finish installing updates, whether security updates install themselves, and whether Ubuntu Pro's extended support is on.
   - The PHP running the scheduler, and the PHP serving web requests (about one web request in 500 notes its version after the response has gone; set `SKYLOCK_REPORTER_WEB_RUNTIME=false` to turn that off).

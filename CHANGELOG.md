@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.2
+
+- Whether an error monitor is configured is sent with every minute report, not only with what the app runs on, so a deploy that adds Nightwatch, Sentry or the like shows in SkyLock within a minute instead of up to an hour.
+- What the app runs on is read again after every deploy (a new commit, deploy id, dependencies or cached config), not only once an hour.
+- The minute report says when what the app runs on was last read, so SkyLock can say how fresh it is.
+- When someone asks SkyLock to check again, SkyLock asks in its reply to the next minute report, and the reporter reads what the app runs on afresh and sends it. Older SkyLocks never ask.
+
 ## 0.3.1
 
 - A task that repeats within the minute (`everyFifteenSeconds()` and the like) is reported for its first run each minute, every failure, and the first success after one, instead of every run. SkyLock judges lateness by the minute, so the other runs told it nothing; a 15-second task sent 11,520 requests a day and now sends about 2,880.
