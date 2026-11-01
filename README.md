@@ -12,7 +12,7 @@ PHP 8.2 or later and Laravel 12 or 13, with the scheduler running (`schedule:run
 composer require blackairplane/skylock-laravel
 ```
 
-Add the token from the application's **Status** tab in SkyLock to `.env`:
+It does nothing until it has a token, so it's safe to merge first. An Owner or Admin creates the token in SkyLock, on the application's **Settings** tab under **From inside the app**. Add it to production's `.env`:
 
 ```dotenv
 SKYLOCK_REPORTER_URL=https://getskylock.com
