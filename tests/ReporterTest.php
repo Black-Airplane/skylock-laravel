@@ -59,7 +59,9 @@ it('never breaks the app when SkyLock can’t be reached, and does nothing witho
     Http::fake(['*' => Http::failedConnection()]);
 
     $this->artisan('skylock:report')->assertSuccessful();
-    $this->artisan('skylock:test')->assertFailed();
+    $this->artisan('skylock:test')
+        ->expectsOutputToContain('on the application\'s Settings tab')
+        ->assertFailed();
     Http::assertNothingSent();
 
     reporterConfigured();

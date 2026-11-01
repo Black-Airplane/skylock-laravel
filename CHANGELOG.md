@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `skylock:test` and the README send people to the application's Settings tab for the token (it moved there from the Status tab), and say an Owner or Admin creates it.
+
 ## 0.3.3
 
 - Quiet in Laravel Nightwatch. Nightwatch recorded every minute's report in full (the scheduled task, its own process, the request to SkyLock, five cache calls and three to eleven queries), 11 to 19 events a minute, or 475,000 to 820,000 a month for an app nobody uses. Now it records one report in a hundred, in `schedule:run` and in the report's own process; a report it skips is skipped whole, and one that throws is always recorded. `SKYLOCK_REPORTER_NIGHTWATCH_SAMPLE_RATE` changes the share.

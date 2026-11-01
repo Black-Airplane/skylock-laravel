@@ -15,7 +15,7 @@ class TestCommand extends Command
     public function handle(SkyLockClient $client, HealthChecks $checks): int
     {
         if (! $client->configured()) {
-            $this->components->error('Set SKYLOCK_REPORTER_TOKEN in .env first. Create the token on the application\'s Status tab in SkyLock.');
+            $this->components->error('Set SKYLOCK_REPORTER_URL and SKYLOCK_REPORTER_TOKEN in .env first. An Owner or Admin creates the token in SkyLock, on the application\'s Settings tab under "From inside the app".');
 
             return self::FAILURE;
         }
