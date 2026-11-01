@@ -46,7 +46,8 @@ final class WebRuntime
                 return;
             }
 
-            Cache::put(self::CACHE_KEY, ['version' => PHP_VERSION, 'sapi' => PHP_SAPI], now()->addDay());
+            // After the response, but still on the request's record in Nightwatch.
+            NightwatchSampling::ignore(fn () => Cache::put(self::CACHE_KEY, ['version' => PHP_VERSION, 'sapi' => PHP_SAPI], now()->addDay()));
             self::$sampled = true;
         } catch (Throwable) {
             // The cache is down; the next sample will try again.

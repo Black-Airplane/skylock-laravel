@@ -24,9 +24,13 @@
     },
     "require-dev": {
         "larastan/larastan": "^3.0",
+        "laravel/nightwatch": "^1.30",
         "laravel/pint": "^1.18",
         "orchestra/testbench": "^10.0|^11.0",
         "pestphp/pest": "^3.0|^4.0"
+    },
+    "suggest": {
+        "laravel/nightwatch": "The reporter has Nightwatch record one minute report in a hundred, and none of its work inside your own tasks and requests"
     },
     "autoload": {
         "psr-4": {

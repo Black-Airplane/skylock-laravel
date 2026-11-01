@@ -5,6 +5,7 @@ namespace BlackAirplane\SkyLockReporter;
 use BlackAirplane\SkyLockReporter\Commands\ReportCommand;
 use BlackAirplane\SkyLockReporter\Commands\SyncScheduleCommand;
 use BlackAirplane\SkyLockReporter\Commands\TestCommand;
+use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Console\Events\ScheduledBackgroundTaskFinished;
 use Illuminate\Console\Events\ScheduledTaskFailed;
 use Illuminate\Console\Events\ScheduledTaskFinished;
@@ -43,8 +44,25 @@ class SkyLockReporterServiceProvider extends ServiceProvider
         }
 
         // The report every minute doubles as proof the scheduler is running.
+        // Overlap protection stays: a check on a database that hangs has no timeout.
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
-            $schedule->command('skylock:report')->everyMinute()->runInBackground()->withoutOverlapping(5);
+            NightwatchSampling::task($schedule->command('skylock:report')->everyMinute()->runInBackground()->withoutOverlapping(5));
+        });
+
+        // Each report runs in its own process, which Nightwatch samples at its
+        // command rate as it starts. Nightwatch's listener was added when the
+        // providers registered, so this one runs after it and decides. Only a
+        // process's first command decides, as with Nightwatch.
+        $decided = false;
+        Events::listen(CommandStarting::class, function (CommandStarting $event) use (&$decided): void {
+            if ($decided) {
+                return;
+            }
+            $decided = true;
+
+            if ($event->command === 'skylock:report') {
+                NightwatchSampling::command();
+            }
         });
 
         Events::listen(ScheduledTaskStarting::class, fn (ScheduledTaskStarting $event) => $this->task($event->task, 'starting'));

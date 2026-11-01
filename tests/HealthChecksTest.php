@@ -1,8 +1,10 @@
 <?php
 
 use BlackAirplane\SkyLockReporter\HealthChecks;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
 
 function names(array $results): array
@@ -69,4 +71,56 @@ it('keeps check names to what SkyLock accepts', function () {
     expect(HealthChecks::name('Redis <primary> ✓'))->toBe('Redis  primary')
         ->and(HealthChecks::name('***'))->toBe('Check')
         ->and(mb_strlen(HealthChecks::name(str_repeat('a', 200))))->toBe(80);
+});
+
+it('asks the database two questions: can it answer, and how many jobs failed', function (bool $hasTable) {
+    config(['queue.default' => 'sync', 'queue.failed.table' => 'failed_jobs']);
+    if ($hasTable) {
+        Schema::create('failed_jobs', function (Blueprint $table): void {
+            $table->id();
+            $table->timestamp('failed_at')->useCurrent();
+        });
+    }
+    $asked = 0;
+    DB::beforeExecuting(function () use (&$asked): void {
+        $asked++;
+    });
+
+    $results = collect(app(HealthChecks::class)->run())->keyBy('name');
+
+    expect($asked)->toBe(2)
+        ->and($results->has('Failed jobs, last hour'))->toBe($hasTable)
+        ->and($results['Database']['status'])->toBe('pass');
+})->with(['with a failed_jobs table' => true, 'without one' => false]);
+
+it('marks the failed jobs check failed when the count fails for another reason', function () {
+    config(['queue.default' => 'sync', 'queue.failed.table' => 'failed_jobs']);
+    DB::beforeExecuting(function (string $query): void {
+        if (str_contains($query, 'failed_jobs')) {
+            $lost = new PDOException('server closed the connection unexpectedly');
+            (fn () => $this->code = '08006')->call($lost);
+
+            throw new QueryException('testing', $query, [], $lost);
+        }
+    });
+
+    $results = collect(app(HealthChecks::class)->run())->keyBy('name');
+
+    expect($results['Failed jobs, last hour']['status'])->toBe('fail');
+});
+
+it('checks the cache with a write and a read, and nothing left to delete', function () {
+    config(['queue.default' => 'sync']);
+    $calls = [];
+    Event::listen('Illuminate\Cache\Events\*', function (string $name) use (&$calls): void {
+        $calls[] = class_basename($name);
+    });
+
+    $first = collect(app(HealthChecks::class)->run())->firstWhere('name', 'Cache');
+    config(['cache.default' => 'null']);
+    $broken = collect(app(HealthChecks::class)->run())->firstWhere('name', 'Cache');
+
+    expect($first['status'])->toBe('pass')
+        ->and($broken['status'])->toBe('fail')
+        ->and($calls)->not->toContain('ForgettingKey', 'KeyForgotten');
 });

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.3
+
+- Quiet in Laravel Nightwatch. Nightwatch recorded every minute's report in full (the scheduled task, its own process, the request to SkyLock, five cache calls and three to eleven queries), 11 to 19 events a minute, or 475,000 to 820,000 a month for an app nobody uses. Now it records one report in a hundred, in `schedule:run` and in the report's own process; a report it skips is skipped whole, and one that throws is always recorded. `SKYLOCK_REPORTER_NIGHTWATCH_SAMPLE_RATE` changes the share.
+- Task events and the web PHP note are kept off the app's own tasks and requests in Nightwatch.
+- Each report does less: the schedule's hash and what the app runs on are kept in a file in `storage/framework/cache` instead of the app's cache (two fewer cache reads a minute, and two fewer queries where the cache is the database); the cache check writes a value only that run knows and reads it back, without deleting it; and failed jobs are counted without first asking whether their table exists.
+- What the app runs on is read again on a server's first report after upgrading, and the schedule sent once, since neither is in the file yet.
+- Nothing changes for SkyLock: it receives the same reports.
+
 ## 0.3.2
 
 - Whether an error monitor is configured is sent with every minute report, not only with what the app runs on, so a deploy that adds Nightwatch, Sentry or the like shows in SkyLock within a minute instead of up to an hour.

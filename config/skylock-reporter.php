@@ -34,6 +34,17 @@ return [
 
     'web_runtime' => env('SKYLOCK_REPORTER_WEB_RUNTIME', true),
 
+    /*
+    | Laravel Nightwatch, if the app uses it: the share of minute reports it
+    | records. Each report is much like the last, and recording every one
+    | costs about 16,000 events a day. 0.01 keeps about 14 a day, enough to
+    | see how long they take; 0 keeps none, 1 all of them. A report that
+    | throws is always recorded. Task events and the web PHP note are never
+    | recorded on the app's own tasks and requests.
+    */
+
+    'nightwatch_sample_rate' => env('SKYLOCK_REPORTER_NIGHTWATCH_SAMPLE_RATE', 0.01),
+
     // The deployed commit, when the app doesn't run from a git checkout and the platform doesn't say.
     'commit' => env('SKYLOCK_COMMIT'),
 ];

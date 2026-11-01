@@ -3,13 +3,14 @@
 namespace BlackAirplane\SkyLockReporter\Commands;
 
 use BlackAirplane\SkyLockReporter\HealthChecks;
+use BlackAirplane\SkyLockReporter\LocalState;
 use BlackAirplane\SkyLockReporter\ScheduledTasks;
 use BlackAirplane\SkyLockReporter\SkyLockClient;
 use BlackAirplane\SkyLockReporter\Stack;
 use Composer\InstalledVersions;
 use Illuminate\Console\Command;
 use Illuminate\Console\Scheduling\Schedule;
-use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Date;
 use Throwable;
 
 class ReportCommand extends Command
@@ -48,9 +49,9 @@ class ReportCommand extends Command
         // Send the schedule when it changed, or when SkyLock doesn't have it yet.
         $tasks = ScheduledTasks::all($schedule);
         $hash = sha1((string) json_encode($tasks));
-        if ($response !== null && (($response['scheduleKnown'] ?? false) !== true || Cache::get('skylock-reporter:schedule') !== $hash)) {
+        if ($response !== null && (($response['scheduleKnown'] ?? false) !== true || LocalState::get('schedule') !== $hash)) {
             if ($client->send('PUT', 'schedule', ['tasks' => $tasks]) !== null) {
-                Cache::forever('skylock-reporter:schedule', $hash);
+                LocalState::put('schedule', $hash);
             }
         }
 
@@ -86,14 +87,17 @@ class ReportCommand extends Command
     public static function stack(bool $fresh = false): array
     {
         try {
-            $key = 'skylock-reporter:stack:'.Stack::deployFingerprint();
-            $cached = $fresh ? null : Cache::get($key);
-            if (is_array($cached) && is_array($cached['stack'] ?? null) && is_string($cached['collectedAt'] ?? null)) {
-                return ['collectedAt' => $cached['collectedAt'], 'stack' => $cached['stack']];
+            $deploy = Stack::deployFingerprint();
+            $kept = $fresh ? null : LocalState::get('stack');
+            if (is_array($kept)
+                && ($kept['deploy'] ?? null) === $deploy
+                && is_int($kept['until'] ?? null) && $kept['until'] > Date::now()->getTimestamp()
+                && is_array($kept['stack'] ?? null) && is_string($kept['collectedAt'] ?? null)) {
+                return ['collectedAt' => $kept['collectedAt'], 'stack' => $kept['stack']];
             }
 
             $read = self::read();
-            Cache::put($key, $read, self::STACK_SECONDS);
+            LocalState::put('stack', ['deploy' => $deploy, 'until' => Date::now()->getTimestamp() + self::STACK_SECONDS, ...$read]);
 
             return $read;
         } catch (Throwable) {

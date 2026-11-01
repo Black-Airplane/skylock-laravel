@@ -75,6 +75,15 @@ php artisan vendor:publish --tag=skylock-reporter
 | `thresholds.disk_used_warn` | 90 | Warn at this percentage of disk used |
 | `thresholds.disk_used_fail` | 98 | Fail at this percentage of disk used |
 | `timeout` | 3 | Seconds to wait for SkyLock before giving up |
+| `nightwatch_sample_rate` | 0.01 | The share of minute reports Laravel Nightwatch records (`SKYLOCK_REPORTER_NIGHTWATCH_SAMPLE_RATE`) |
+
+Between minutes the reporter keeps two things on the server, in `storage/framework/cache/skylock-reporter.json`: the schedule's hash and what the app runs on (the same facts it sends). It uses the app's cache only to check the cache works, and to note the web PHP.
+
+## With Laravel Nightwatch
+
+Every minute's report is much like the last, and Nightwatch would record each one in full: the scheduled task, the report's own process, the request to SkyLock, its cache calls and its queries, about 16,000 events a day before anyone uses the app. So the reporter has Nightwatch record one report in a hundred (about 14 a day, enough to see how long they take). A report Nightwatch skips is skipped whole, and one that throws is always recorded. Set `SKYLOCK_REPORTER_NIGHTWATCH_SAMPLE_RATE` between 0 and 1 to change it.
+
+Task events and the web PHP note are sent from inside your app's own tasks and requests, so Nightwatch doesn't record them there: your tasks' records show your work, not SkyLock's. Without Nightwatch none of this does anything.
 
 Without `SKYLOCK_REPORTER_TOKEN` the package does nothing at all, so it's safe to install everywhere and set the token only in production.
 
