@@ -2,11 +2,11 @@
 
 namespace BlackAirplane\SkyLockReporter\Commands;
 
+use BlackAirplane\SkyLockReporter\LocalState;
 use BlackAirplane\SkyLockReporter\ScheduledTasks;
 use BlackAirplane\SkyLockReporter\SkyLockClient;
 use Illuminate\Console\Command;
 use Illuminate\Console\Scheduling\Schedule;
-use Illuminate\Support\Facades\Cache;
 
 class SyncScheduleCommand extends Command
 {
@@ -23,7 +23,7 @@ class SyncScheduleCommand extends Command
             return self::FAILURE;
         }
 
-        Cache::forever('skylock-reporter:schedule', sha1((string) json_encode($tasks)));
+        LocalState::put('schedule', sha1((string) json_encode($tasks)));
         $this->components->info('Sent '.count($tasks).' scheduled '.(count($tasks) === 1 ? 'task' : 'tasks').' to SkyLock.');
 
         return self::SUCCESS;

@@ -2,10 +2,10 @@
 
 namespace BlackAirplane\SkyLockReporter;
 
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Queue;
-use Illuminate\Support\Facades\Schema;
 use Throwable;
 
 /**
@@ -27,12 +27,12 @@ final class HealthChecks
                 return ['status' => 'pass'];
             }),
             $this->attempt('Cache', function (): array {
-                $key = 'skylock-reporter:probe';
-                Cache::put($key, 'ok', 30);
-                $ok = Cache::get($key) === 'ok';
-                Cache::forget($key);
+                // A value only this run knows, so one left by an earlier run can't pass
+                // for it. It expires by itself: deleting it would be one more cache call.
+                $value = bin2hex(random_bytes(8));
+                Cache::put('skylock-reporter:probe', $value, 30);
 
-                return ['status' => $ok ? 'pass' : 'fail'];
+                return ['status' => Cache::get('skylock-reporter:probe') === $value ? 'pass' : 'fail'];
             }),
             ...$this->queue(),
             ...$this->failedJobs(),
@@ -77,21 +77,32 @@ final class HealthChecks
     {
         $table = (string) config('queue.failed.table', 'failed_jobs');
 
-        try {
-            if (! Schema::hasTable($table)) {
-                return [];
-            }
-        } catch (Throwable) {
-            return [];
-        }
-
+        // One query, not a look for the table first: an app without the table is told
+        // apart by the error, and its report simply leaves the check out.
         $result = $this->attempt('Failed jobs, last hour', function () use ($table): array {
-            $count = DB::table($table)->where('failed_at', '>=', now()->subHour())->count();
+            try {
+                $count = DB::table($table)->where('failed_at', '>=', now()->subHour())->count();
+            } catch (QueryException $exception) {
+                if (self::missingTable($exception)) {
+                    return ['status' => 'skip'];
+                }
+
+                throw $exception;
+            }
 
             return ['status' => $count > 0 ? 'warn' : 'pass', 'value' => $count, 'unit' => 'jobs'];
         });
 
         return $result === null ? [] : [$result];
+    }
+
+    /**
+     * MySQL, MariaDB and SQL Server say 42S02, PostgreSQL 42P01, SQLite only in words.
+     */
+    private static function missingTable(QueryException $exception): bool
+    {
+        return in_array((string) $exception->getCode(), ['42S02', '42P01'], true)
+            || str_contains($exception->getMessage(), 'no such table');
     }
 
     /**

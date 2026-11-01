@@ -59,11 +59,12 @@ final class TaskEvents
             return;
         }
 
-        $response = $this->client->send('POST', 'task-events', array_filter([
+        // Sent inside the app's own task, so Nightwatch would put it on that task's record.
+        $response = NightwatchSampling::ignore(fn (): ?array => $this->client->send('POST', 'task-events', array_filter([
             'key' => $key,
             'event' => $event,
             'durationMs' => $durationMs,
-        ], fn ($value) => $value !== null));
+        ], fn ($value) => $value !== null)));
 
         if ($response === null) {
             $this->pausedUntil = Date::now()->addSeconds(self::PAUSE_SECONDS);
