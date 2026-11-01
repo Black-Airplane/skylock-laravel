@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.4
 
 - `skylock:test` and the README send people to the application's Settings tab for the token (it moved there from the Status tab), and say an Owner or Admin creates it.
 
