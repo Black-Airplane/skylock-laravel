@@ -7,23 +7,6 @@ use Illuminate\Console\Scheduling\Event;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 
-/**
- * Fakes SkyLock and returns every task event sent to it, as "label:event".
- *
- * @param  array<string, string>  $labels  task keys to names, to keep assertions readable
- */
-function skyLock(array $labels, bool $reachable = true): ArrayObject
-{
-    $sent = new ArrayObject;
-    Http::fake(function (Request $request) use ($sent, $labels, $reachable) {
-        $sent[] = ($labels[$request['key']] ?? '?').':'.$request['event'];
-
-        return $reachable ? Http::response(['accepted' => true, 'known' => true], 202) : Http::failedConnection()($request);
-    });
-
-    return $sent;
-}
-
 /** One run of a task, as schedule:run reports it. */
 function run(Event $task, bool $fails = false): void
 {

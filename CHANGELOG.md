@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.0
+
+- Queued jobs report how a scheduled task's work really went. Before, a task like `Schedule::job(new NightlySync)` was reported finished as soon as its job was queued, so a job that failed or was killed on the queue worker every night still looked fine in SkyLock. Now every job queued while a scheduled task runs carries the task's key, and so does every job those jobs queue in turn. A task whose run queued exactly one job is reported finished when that job finishes, with its running time. Any job in the task's work that fails for good, or is killed for running too long, reports the task failed, once per run.
+- Other tasks are reported as before. Jobs queued outside a scheduled task carry nothing.
+- The scheduler and the queue workers note each run's progress in the app's cache, so they need the same cache store.
+- Nothing changes for SkyLock: it receives the same three events.
+
 ## 0.3.4
 
 - `skylock:test` and the README send people to the application's Settings tab for the token (it moved there from the Status tab), and say an Owner or Admin creates it.

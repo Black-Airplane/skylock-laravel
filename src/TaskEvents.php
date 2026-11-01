@@ -59,12 +59,7 @@ final class TaskEvents
             return;
         }
 
-        // Sent inside the app's own task, so Nightwatch would put it on that task's record.
-        $response = NightwatchSampling::ignore(fn (): ?array => $this->client->send('POST', 'task-events', array_filter([
-            'key' => $key,
-            'event' => $event,
-            'durationMs' => $durationMs,
-        ], fn ($value) => $value !== null)));
+        $response = $this->post($key, $event, $durationMs);
 
         if ($response === null) {
             $this->pausedUntil = Date::now()->addSeconds(self::PAUSE_SECONDS);
@@ -80,6 +75,31 @@ final class TaskEvents
                 unset($this->failing[$key]);
             }
         }
+    }
+
+    /**
+     * The outcome of the work a scheduled task queued, reported from the
+     * queue worker that ran it (see QueuedRuns). Workers aren't the
+     * scheduler, so there's nothing to hold up and nothing to pause.
+     *
+     * @param  'finished'|'failed'  $event
+     */
+    public function sendForQueuedWork(string $key, string $event, ?int $durationMs = null): void
+    {
+        $this->post($key, $event, $durationMs);
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private function post(string $key, string $event, ?int $durationMs): ?array
+    {
+        // Sent inside the app's own task or job, so Nightwatch would put it on that record.
+        return NightwatchSampling::ignore(fn (): ?array => $this->client->send('POST', 'task-events', array_filter([
+            'key' => $key,
+            'event' => $event,
+            'durationMs' => $durationMs,
+        ], fn ($value) => $value !== null)));
     }
 
     /**

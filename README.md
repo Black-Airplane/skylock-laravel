@@ -51,6 +51,17 @@ Only these, and nothing else:
   It reads plain files and asks PHP and the app's own connections; it never runs a command. Anything it can't read is sent as nothing.
 - **When your schedule changes:** each scheduled task's cron expression, time zone, a label (its `->description()`, or just the command's name, such as `backup:run`) and a key that's a hash of its full command.
 - **When a scheduled task starts, finishes or fails:** its key, and how long it took. A task that repeats within the minute (`everyFifteenSeconds()` and the like) is reported for its first run each minute, every failure, and the first success after one.
+- **When the queued work a scheduled task started finishes or fails:** the same events, sent by the queue worker. See [Queued jobs](#queued-jobs).
+
+### Queued jobs
+
+`Schedule::job(new NightlySync)` finishes the moment the job is queued, and the real work happens later on a queue worker, where it can fail or be killed for running too long without the scheduler knowing. So every job queued while a scheduled task runs carries the task's key in its payload, and so does every job those jobs queue, however far the work fans out.
+
+- A task whose run queued exactly one job (the `Schedule::job` shape) is reported finished when that job finishes, with the job's running time. A job released to wait (a rate limit, say) isn't finished until it really is.
+- Any job carrying a task's key that fails for good, or is killed for running too long, reports the task failed. That's once per run, however many of its jobs fail.
+- Other tasks are reported as before, and the jobs they queue still report failures.
+
+The payload gains a `skylock` entry (the task key, a random run id, and how far out the job is). The scheduler and the workers note a run's progress in the app's cache for up to two days, so both need the same cache store, as Laravel's scheduler already does for its own locks.
 
 It never sends error messages, exception text, hostnames, addresses, connection names, queries, environment variables (names or values), command arguments or anything a user entered. A report that can't get through is dropped after three seconds, and the reporter never throws. Task events are sent from inside the scheduler, so after one doesn't get through, tasks that run again within two minutes skip SkyLock for a minute (their next run reports them): an unreachable SkyLock costs your scheduler about one timeout a minute, however many tasks it runs. Failures, and tasks that run less often, are always sent.
 
