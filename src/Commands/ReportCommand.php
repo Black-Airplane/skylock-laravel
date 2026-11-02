@@ -4,6 +4,7 @@ namespace BlackAirplane\SkyLockReporter\Commands;
 
 use BlackAirplane\SkyLockReporter\HealthChecks;
 use BlackAirplane\SkyLockReporter\LocalState;
+use BlackAirplane\SkyLockReporter\QueuedOutcomes;
 use BlackAirplane\SkyLockReporter\ScheduledTasks;
 use BlackAirplane\SkyLockReporter\SkyLockClient;
 use BlackAirplane\SkyLockReporter\Stack;
@@ -22,7 +23,7 @@ class ReportCommand extends Command
     /** How long what the app runs on is kept before it's read again, when nothing is deployed. */
     public const STACK_SECONDS = 3600;
 
-    public function handle(SkyLockClient $client, HealthChecks $checks, Schedule $schedule): int
+    public function handle(SkyLockClient $client, HealthChecks $checks, Schedule $schedule, QueuedOutcomes $outcomes): int
     {
         if (! $client->configured()) {
             $this->components->warn('SKYLOCK_REPORTER_TOKEN isn\'t set, so nothing was sent.');
@@ -53,6 +54,12 @@ class ReportCommand extends Command
             if ($client->send('PUT', 'schedule', ['tasks' => $tasks]) !== null) {
                 LocalState::put('schedule', $hash);
             }
+        }
+
+        // How scheduled tasks' queued work went since the last report. While
+        // SkyLock can't be reached it waits for the next one.
+        if ($response !== null) {
+            $outcomes->send();
         }
 
         return self::SUCCESS;

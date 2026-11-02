@@ -29,8 +29,9 @@ class SkyLockReporterServiceProvider extends ServiceProvider
         $this->app->singleton(SkyLockClient::class);
         // One per process: it remembers what this scheduler run has sent.
         $this->app->singleton(TaskEvents::class);
+        $this->app->singleton(QueuedOutcomes::class, fn ($app) => new QueuedOutcomes($app->make('cache.store'), $app->make(TaskEvents::class)));
         // One per process: it knows which task or job is running in it.
-        $this->app->singleton(QueuedRuns::class, fn ($app) => new QueuedRuns($app->make(TaskEvents::class), $app->make('cache.store')));
+        $this->app->singleton(QueuedRuns::class, fn ($app) => new QueuedRuns($app->make(TaskEvents::class), $app->make(QueuedOutcomes::class), $app->make('cache.store')));
     }
 
     public function boot(): void

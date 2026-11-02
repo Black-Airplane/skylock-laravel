@@ -25,6 +25,8 @@ use Illuminate\Support\Str;
  *
  * Other tasks report as they always have. The scheduler and the workers are
  * separate processes, so the cache records which side reports a run's finish.
+ * A worker never waits on SkyLock: what it has to say goes to QueuedOutcomes,
+ * and the next minute report sends it.
  */
 final class QueuedRuns
 {
@@ -44,6 +46,7 @@ final class QueuedRuns
 
     public function __construct(
         private readonly TaskEvents $events,
+        private readonly QueuedOutcomes $outcomes,
         private readonly Cache $cache,
     ) {}
 
@@ -115,7 +118,7 @@ final class QueuedRuns
         $durationMs = (int) round((microtime(true) - ($startedAt ?? microtime(true))) * 1000);
         $this->cache->put($this->note('done', $tag['run']), $durationMs, self::KEEP_SECONDS);
         if ($this->cache->pull($this->note('defer', $tag['run'])) !== null) {
-            $this->events->sendForQueuedWork($tag['key'], 'finished', $durationMs);
+            $this->outcomes->add($tag['key'], 'finished', $durationMs);
         }
     }
 
@@ -135,7 +138,7 @@ final class QueuedRuns
     {
         $tag = $this->tag($job);
         if ($tag !== null && $this->cache->add($this->note('failed', $tag['run']), true, self::KEEP_SECONDS)) {
-            $this->events->sendForQueuedWork($tag['key'], 'failed');
+            $this->outcomes->add($tag['key'], 'failed');
         }
     }
 
