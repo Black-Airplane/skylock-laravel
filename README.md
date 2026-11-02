@@ -51,7 +51,7 @@ Only these, and nothing else:
   It reads plain files and asks PHP and the app's own connections; it never runs a command. Anything it can't read is sent as nothing.
 - **When your schedule changes:** each scheduled task's cron expression, time zone, a label (its `->description()`, or just the command's name, such as `backup:run`) and a key that's a hash of its full command.
 - **When a scheduled task starts, finishes or fails:** its key, and how long it took. A task that repeats within the minute (`everyFifteenSeconds()` and the like) is reported for its first run each minute, every failure, and the first success after one.
-- **When the queued work a scheduled task started finishes or fails:** the same events, sent by the queue worker. See [Queued jobs](#queued-jobs).
+- **When the queued work a scheduled task started finishes or fails:** the same events, noted by the queue worker and sent with the next minute report. See [Queued jobs](#queued-jobs).
 
 ### Queued jobs
 
@@ -60,6 +60,8 @@ Only these, and nothing else:
 - A task whose run queued exactly one job (the `Schedule::job` shape) is reported finished when that job finishes, with the job's running time. A job released to wait (a rate limit, say) isn't finished until it really is.
 - Any job carrying a task's key that fails for good, or is killed for running too long, reports the task failed. That's once per run, however many of its jobs fail.
 - Other tasks are reported as before, and the jobs they queue still report failures.
+
+Workers don't wait on SkyLock. A worker notes how the work went in the app's cache and takes its next job, and the next minute report sends what was noted, so it reaches SkyLock within a minute. SkyLock judges a task late by when it next starts, which the scheduler sends as it happens, so that minute changes nothing it decides. While SkyLock can't be reached, the notes wait for the next report that gets through (for up to two days, the newest 500). A cache store without locks can't share them safely, so there each worker sends straight away instead.
 
 The payload gains a `skylock` entry (the task key, a random run id, and how far out the job is). The scheduler and the workers note a run's progress in the app's cache for up to two days, so both need the same cache store, as Laravel's scheduler already does for its own locks.
 

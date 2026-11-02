@@ -31,16 +31,23 @@ function scheduledEvent(string $command, string $expression = '0 2 * * *'): Even
 
 /**
  * Fakes SkyLock and returns every task event sent to it, as "label:event".
+ * Anything else, like the minute report's health, is answered but not listed.
  *
  * @param  array<string, string>  $labels  task keys to names, to keep assertions readable
+ * @param  bool|ArrayObject<string, bool>  $reachable  an ArrayObject's `up` can change mid-test
  */
-function skyLock(array $labels, bool $reachable = true): ArrayObject
+function skyLock(array $labels, bool|ArrayObject $reachable = true): ArrayObject
 {
     $sent = new ArrayObject;
     Http::fake(function (Request $request) use ($sent, $labels, $reachable) {
+        $up = is_bool($reachable) ? $reachable : $reachable['up'];
+        if (! str_ends_with($request->url(), '/task-events')) {
+            return $up ? Http::response(['accepted' => true, 'scheduleKnown' => true, 'stackKnown' => true], 202) : Http::failedConnection()($request);
+        }
+
         $sent[] = ($labels[$request['key']] ?? '?').':'.$request['event'];
 
-        return $reachable ? Http::response(['accepted' => true, 'known' => true], 202) : Http::failedConnection()($request);
+        return $up ? Http::response(['accepted' => true, 'known' => true], 202) : Http::failedConnection()($request);
     });
 
     return $sent;

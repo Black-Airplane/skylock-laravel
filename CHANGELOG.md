@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+- Queue workers no longer wait on SkyLock. In 0.4.0 the worker that ran a scheduled task's job told SkyLock how it went before taking its next job, so every run of a frequent task gained a few hundred milliseconds, counted as the job's own time in Nightwatch and the like, and up to the three-second timeout when SkyLock was slow. Now the worker notes it in the app's cache and the next minute report sends it, within a minute. SkyLock judges a task late by when it next starts, which the scheduler still sends as it happens, so nothing it decides changes.
+- While SkyLock can't be reached, those notes wait for the next report that gets through, for up to two days (the newest 500).
+- A cache store without locks can't share the notes safely, so there the worker still sends straight away.
+- The minute report reads the cache once more, to look for what the workers noted.
+- Nothing changes for SkyLock: it receives the same events.
+
 ## 0.4.0
 
 - Queued jobs report how a scheduled task's work really went. Before, a task like `Schedule::job(new NightlySync)` was reported finished as soon as its job was queued, so a job that failed or was killed on the queue worker every night still looked fine in SkyLock. Now every job queued while a scheduled task runs carries the task's key, and so does every job those jobs queue in turn. A task whose run queued exactly one job is reported finished when that job finishes, with its running time. Any job in the task's work that fails for good, or is killed for running too long, reports the task failed, once per run.

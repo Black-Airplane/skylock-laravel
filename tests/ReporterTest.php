@@ -105,9 +105,13 @@ it('remembers the schedule and what the app runs on in a file, not in the app’
     expect(Http::recorded(fn (Request $request): bool => str_ends_with($request->url(), '/schedule')))->toHaveCount(1)
         ->and(LocalState::get('schedule'))->toMatch('/^[0-9a-f]{40}$/')
         ->and(LocalState::get('stack'))->toHaveKeys(['deploy', 'until', 'collectedAt', 'stack'])
-        // Only the cache check uses the cache now (and the web PHP note, read with the stack).
-        ->and(collect($first)->map(fn (string $event) => Str::after($event, ':'))->unique()->sort()->values()->all())->toBe(['skylock-reporter:probe', 'skylock-reporter:web-runtime'])
-        ->and($cache)->toBe(['WritingKey:skylock-reporter:probe', 'KeyWritten:skylock-reporter:probe', 'RetrievingKey:skylock-reporter:probe', 'CacheHit:skylock-reporter:probe']);
+        // Only the cache check and one look for what queue workers noted use the cache now
+        // (and the web PHP note, read with the stack).
+        ->and(collect($first)->map(fn (string $event) => Str::after($event, ':'))->unique()->sort()->values()->all())->toBe(['skylock-reporter:probe', 'skylock-reporter:queued-outcomes', 'skylock-reporter:web-runtime'])
+        ->and($cache)->toBe([
+            'WritingKey:skylock-reporter:probe', 'KeyWritten:skylock-reporter:probe', 'RetrievingKey:skylock-reporter:probe', 'CacheHit:skylock-reporter:probe',
+            'RetrievingKey:skylock-reporter:queued-outcomes', 'CacheMissed:skylock-reporter:queued-outcomes',
+        ]);
 });
 
 it('reads what the app runs on again after an hour', function () {

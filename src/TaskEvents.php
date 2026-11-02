@@ -78,15 +78,16 @@ final class TaskEvents
     }
 
     /**
-     * The outcome of the work a scheduled task queued, reported from the
-     * queue worker that ran it (see QueuedRuns). Workers aren't the
-     * scheduler, so there's nothing to hold up and nothing to pause.
+     * The outcome of the work a scheduled task queued (see QueuedRuns), sent
+     * by the minute report, or by the scheduler when the work finished first.
+     * Neither sends it again, so there's nothing to pause.
      *
      * @param  'finished'|'failed'  $event
+     * @return bool Whether SkyLock took it
      */
-    public function sendForQueuedWork(string $key, string $event, ?int $durationMs = null): void
+    public function sendForQueuedWork(string $key, string $event, ?int $durationMs = null): bool
     {
-        $this->post($key, $event, $durationMs);
+        return $this->post($key, $event, $durationMs) !== null;
     }
 
     /**

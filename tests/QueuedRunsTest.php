@@ -1,5 +1,6 @@
 <?php
 
+use BlackAirplane\SkyLockReporter\QueuedOutcomes;
 use BlackAirplane\SkyLockReporter\QueuedRuns;
 use BlackAirplane\SkyLockReporter\ScheduledTasks;
 use Illuminate\Bus\Queueable;
@@ -10,10 +11,14 @@ use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Foundation\Bus\Dispatchable;
+use Illuminate\Http\Client\Request;
 use Illuminate\Queue\Events\JobTimedOut;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\Jobs\SyncJob;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Illuminate\Support\Sleep;
 
 final class SkyLockTestSucceeds implements ShouldQueue
 {
@@ -82,6 +87,12 @@ function workQueue(): void
     test()->artisan('queue:work', ['connection' => 'database', '--stop-when-empty' => true, '--sleep' => 0])->run();
 }
 
+/** What the scheduler runs every minute, which sends what the workers noted. */
+function minuteReport(): void
+{
+    test()->artisan('skylock:report')->run();
+}
+
 beforeEach(function () {
     reporterConfigured();
     Schema::create('jobs', function (Blueprint $table) {
@@ -118,7 +129,11 @@ it('reports a queued job\'s task as finished when the job finishes, not when it 
     runScheduled($task);
     expect($sent->getArrayCopy())->toBe(['nightly:starting']);
 
+    // The worker notes it and moves on, without waiting on SkyLock.
     workQueue();
+    expect($sent->getArrayCopy())->toBe(['nightly:starting']);
+
+    minuteReport();
     expect($sent->getArrayCopy())->toBe(['nightly:starting', 'nightly:finished']);
 });
 
@@ -137,6 +152,7 @@ it('reports the task as failed when its job fails', function () {
 
     runScheduled($task);
     workQueue();
+    minuteReport();
 
     expect($sent->getArrayCopy())->toBe(['nightly:starting', 'nightly:failed']);
 });
@@ -147,6 +163,7 @@ it('follows the work as it fans out, and reports a run\'s failures once', functi
 
     runScheduled($task);
     workQueue();
+    minuteReport();
 
     expect($sent->getArrayCopy())->toBe(['sweep:starting', 'sweep:finished', 'sweep:failed']);
 });
@@ -157,11 +174,13 @@ it('waits for a released job to really finish', function () {
 
     runScheduled($task);
     workQueue();
+    minuteReport();
     expect(SkyLockTestWaitsOnce::$runs)->toBe(1)
         ->and($sent->getArrayCopy())->toBe(['nightly:starting']);
 
     $this->travel(61)->seconds();
     workQueue();
+    minuteReport();
     expect(SkyLockTestWaitsOnce::$runs)->toBe(2)
         ->and($sent->getArrayCopy())->toBe(['nightly:starting', 'nightly:finished']);
 });
@@ -184,6 +203,7 @@ it('tags nothing queued outside a scheduled task', function () {
 
     SkyLockTestFails::dispatch()->onConnection('database');
     workQueue();
+    minuteReport();
 
     expect($sent->getArrayCopy())->toBe([]);
 });
@@ -197,6 +217,64 @@ it('reports the task as failed when the worker kills its job for running too lon
 
     // The worker fires this, then kills its own process.
     event(new JobTimedOut('database', new SyncJob(app(), json_encode($payload), 'database', 'default')));
+    minuteReport();
 
     expect($sent->getArrayCopy())->toBe(['nightly:failed']);
+});
+
+it('keeps what the workers noted while SkyLock is down for the next minute report', function () {
+    $task = queuedTask(new SkyLockTestFails);
+    $reachable = new ArrayObject(['up' => true]);
+    $sent = skyLock([ScheduledTasks::key($task) => 'nightly'], $reachable);
+
+    runScheduled($task);
+    workQueue();
+    $reachable['up'] = false;
+    minuteReport();
+    expect($sent->getArrayCopy())->toBe(['nightly:starting']);
+
+    $reachable['up'] = true;
+    minuteReport();
+    minuteReport();
+    expect($sent->getArrayCopy())->toBe(['nightly:starting', 'nightly:failed']);
+});
+
+it('tries an outcome SkyLock turned away again at the next minute report, in order', function () {
+    $first = queuedTask(new SkyLockTestFails);
+    $second = queuedTask(new SkyLockTestSucceeds);
+    $labels = [ScheduledTasks::key($first) => 'first', ScheduledTasks::key($second) => 'second'];
+    $taking = new ArrayObject(['events' => true]);
+    $sent = new ArrayObject;
+    Http::fake(function (Request $request) use ($labels, $taking, $sent) {
+        if (! str_ends_with($request->url(), '/task-events')) {
+            return Http::response(['accepted' => true, 'scheduleKnown' => true, 'stackKnown' => true], 202);
+        }
+        $sent[] = $labels[$request['key']].':'.$request['event'];
+
+        return $taking['events'] ? Http::response(['accepted' => true], 202) : Http::failedConnection()($request);
+    });
+
+    runScheduled($first);
+    runScheduled($second);
+    workQueue();
+    $taking['events'] = false;
+    minuteReport();
+    $taking['events'] = true;
+    minuteReport();
+
+    // Turned away, the first stops the report; both go next time, oldest first.
+    expect(array_slice($sent->getArrayCopy(), 2))->toBe(['first:failed', 'first:failed', 'second:finished']);
+});
+
+it('sends straight from the worker when it can\'t get the lock on what\'s waiting', function () {
+    $task = queuedTask(new SkyLockTestFails);
+    $sent = skyLock([ScheduledTasks::key($task) => 'nightly']);
+    runScheduled($task);
+
+    // Held elsewhere for longer than a worker waits (time moves on as it waits).
+    Cache::lock(QueuedOutcomes::CACHE_KEY.':lock', 10)->get();
+    Sleep::fake(syncWithCarbon: true);
+    workQueue();
+
+    expect($sent->getArrayCopy())->toBe(['nightly:starting', 'nightly:failed']);
 });
