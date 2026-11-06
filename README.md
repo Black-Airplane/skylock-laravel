@@ -40,7 +40,7 @@ Only these, and nothing else:
   - Results from [spatie/laravel-health](https://github.com/spatie/laravel-health), if it's installed: name and status only.
 - **What the app runs on, when it changes** (read at most once an hour, again after every deploy, and straight away when someone asks SkyLock to check again; SkyLock asks for it when it doesn't have the latest):
   - The operating system's ID and version (`ubuntu`, `22.04`) and whether it's a container.
-  - On Debian and Ubuntu: how many security updates are waiting (the count update-notifier keeps), whether a restart is needed to finish installing updates, whether security updates install themselves, and whether Ubuntu Pro's extended support is on.
+  - On Debian and Ubuntu: how many security updates are waiting (the count update-notifier keeps), whether a restart is needed to finish installing updates (since when, and whether it's for a new kernel: a yes or no, never package names), which kernel is running (Ubuntu: its build and flavour), whether security updates install themselves, and whether Ubuntu Pro's extended support is on.
   - The PHP running the scheduler, and the PHP serving web requests (about one web request in 500 notes its version after the response has gone; set `SKYLOCK_REPORTER_WEB_RUNTIME=false` to turn that off).
   - Laravel's version; the default database's product and version (`mysql`, `8.0.36`); Redis or Valkey's version when the cache, queue or sessions use it.
   - The deployed commit (`SKYLOCK_COMMIT`, a platform's own variable, or the git checkout).

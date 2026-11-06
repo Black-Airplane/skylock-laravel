@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2
+
+- A pending restart now says since when and what it's for. On Debian and Ubuntu, the reporter sends when the restart flag was last written (each install that needs a restart writes it again, so it's "at least since") and whether a new kernel is among the packages waiting on it: one boolean, never the package names. SkyLock dates the restart from the server instead of from when it first heard, and says when it's a kernel update.
+- When the reporter can't look for the restart flag (open_basedir hides `/var/run`), it sends null, not "no restart needed", so it can never close a finding it couldn't check.
+- On Ubuntu, the running kernel's build and flavour (`5.15.0-125.135`, `generic`), from `/proc/version_signature`, the line Ubuntu writes for exactly this. SkyLock looks up what that build is missing compared with the newest one Ubuntu has published, and ranks it like any package's vulnerabilities. A custom kernel, or one it can't read, is sent as null.
+- Still never runs a command: all of it comes from plain files (`/var/run/reboot-required`, `/var/run/reboot-required.pkgs`, `/proc/version_signature`).
+
 ## 0.4.1
 
 - Queue workers no longer wait on SkyLock. In 0.4.0 the worker that ran a scheduled task's job told SkyLock how it went before taking its next job, so every run of a frequent task gained a few hundred milliseconds, counted as the job's own time in Nightwatch and the like, and up to the three-second timeout when SkyLock was slow. Now the worker notes it in the app's cache and the next minute report sends it, within a minute. SkyLock judges a task late by when it next starts, which the scheduler still sends as it happens, so nothing it decides changes.

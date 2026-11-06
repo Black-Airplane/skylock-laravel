@@ -35,7 +35,21 @@ function ubuntuServer(): void
     serverFile('/etc/machine-id', "0123456789abcdef0123456789abcdef\n");
     serverFile('/var/lib/update-notifier/updates-available', "\n12 updates can be applied immediately.\n4 of these updates are standard security updates.\nTo see these additional updates run: apt list --upgradable\n");
     serverFile('/var/run/reboot-required', "*** System restart required ***\n");
+    serverFile('/var/run/reboot-required.pkgs', "linux-image-5.15.0-126-generic\nlinux-base\n");
+    serverFile('/proc/version_signature', "Ubuntu 5.15.0-125.135-generic 5.15.167\n");
+    touch(test()->root.'/var/run/reboot-required', strtotime('2026-10-30 02:05:00 UTC'));
     serverFile('/etc/apt/apt.conf.d/20auto-upgrades', "APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n");
+}
+
+/**
+ * What it reads about patching on an Ubuntu server. Called directly, so it
+ * runs anywhere: telling which system this is reads /etc, which is Linux only.
+ *
+ * @return array<string, mixed>|null
+ */
+function ubuntuPatching(): ?array
+{
+    return Closure::bind(fn (): ?array => Stack::patching('ubuntu'), null, Stack::class)();
 }
 
 it('sends what it runs on as names from fixed lists, versions, counts and booleans', function () {
@@ -49,7 +63,7 @@ it('sends what it runs on as names from fixed lists, versions, counts and boolea
 
     expect(array_keys($stack))->toBe(['schema', 'os', 'patching', 'php', 'laravel', 'database', 'cache', 'deployedCommit', 'hosting', 'serverKey', 'errorMonitoring'])
         ->and($stack['os'])->toBe(['type' => 'linux', 'id' => 'ubuntu', 'version' => '22.04', 'container' => false])
-        ->and($stack['patching'])->toBe(['securityUpdates' => 4, 'restartPending' => true, 'autoUpdates' => true, 'extendedSupport' => false])
+        ->and($stack['patching'])->toBe(['securityUpdates' => 4, 'restartPending' => true, 'restartPendingSince' => '2026-10-30T02:05:00Z', 'restartForKernel' => true, 'kernel' => ['version' => '5.15.0-125.135', 'flavour' => 'generic'], 'autoUpdates' => true, 'extendedSupport' => false])
         ->and($stack['php']['cli'])->toBe(PHP_VERSION)
         ->and($stack['database']['product'])->toBe('sqlite')
         ->and($stack['deployedCommit'])->toBe(str_repeat('ab', 20))
@@ -57,7 +71,65 @@ it('sends what it runs on as names from fixed lists, versions, counts and boolea
         ->and($stack['errorMonitoring'])->toBeTrue()
         ->and(json_encode($stack))->not->toContain('sentinel-dsn')
         ->and(json_encode($stack))->not->toContain('0123456789abcdef0123456789abcdef')
-        ->and(json_encode($stack))->not->toContain('Ubuntu 22.04.5 LTS');
+        ->and(json_encode($stack))->not->toContain('Ubuntu 22.04.5 LTS')
+        ->and(json_encode($stack))->not->toContain('linux-image');
+});
+
+it('says since when a restart has been pending, and whether a new kernel waits on it, without naming a package', function () {
+    ubuntuServer();
+
+    expect(ubuntuPatching())
+        ->restartPending->toBeTrue()
+        ->restartPendingSince->toBe('2026-10-30T02:05:00Z')
+        ->restartForKernel->toBeTrue()
+        ->and(json_encode(ubuntuPatching()))->not->toContain('linux-');
+
+    // libc and dbus ask for a restart too.
+    serverFile('/var/run/reboot-required.pkgs', "libc6\ndbus\n");
+    expect(ubuntuPatching()['restartForKernel'])->toBeFalse();
+
+    // Without the package list, it can't say.
+    unlink($this->root.'/var/run/reboot-required.pkgs');
+    expect(ubuntuPatching())->restartPending->toBeTrue()->restartForKernel->toBeNull();
+});
+
+it('says no restart is needed only when it could look', function () {
+    ubuntuServer();
+    unlink($this->root.'/var/run/reboot-required');
+    unlink($this->root.'/var/run/reboot-required.pkgs');
+
+    expect(ubuntuPatching())
+        ->restartPending->toBeFalse()
+        ->restartPendingSince->toBeNull()
+        ->restartForKernel->toBeNull();
+
+    // open_basedir hides /var/run: that's "couldn't check", never "not needed".
+    rmdir($this->root.'/var/run');
+    expect(ubuntuPatching())
+        ->restartPending->toBeNull()
+        ->restartPendingSince->toBeNull()
+        ->restartForKernel->toBeNull()
+        ->securityUpdates->toBe(4);
+});
+
+it('says which kernel is running, from the line Ubuntu writes for it', function (string $signature, ?array $kernel) {
+    ubuntuServer();
+    serverFile('/proc/version_signature', $signature);
+
+    expect(ubuntuPatching()['kernel'])->toBe($kernel);
+})->with([
+    'generic' => ["Ubuntu 5.15.0-125.135-generic 5.15.167\n", ['version' => '5.15.0-125.135', 'flavour' => 'generic']],
+    'hardware enablement' => ["Ubuntu 6.8.0-48.48~22.04.1-generic 6.8.12\n", ['version' => '6.8.0-48.48~22.04.1', 'flavour' => 'generic']],
+    'cloud' => ["Ubuntu 5.15.0-1056.61-aws 5.15.149\n", ['version' => '5.15.0-1056.61', 'flavour' => 'aws']],
+    'lowlatency respin' => ["Ubuntu 6.8.0-147.147.1-lowlatency 6.8.12\n", ['version' => '6.8.0-147.147.1', 'flavour' => 'lowlatency']],
+    'a custom kernel' => ["Linux 6.11.0-custom\n", null],
+    'nothing to read' => ['', null],
+]);
+
+it('leaves the kernel to Ubuntu: Debian writes no build line', function () {
+    ubuntuServer();
+
+    expect(Closure::bind(fn (): ?array => Stack::patching('debian'), null, Stack::class)()['kernel'])->toBeNull();
 });
 
 it('leaves out what it can’t read instead of guessing', function () {

@@ -124,10 +124,12 @@ final class Stack
     /**
      * Debian and Ubuntu only: pending security updates (from the count
      * update-notifier keeps), whether a restart is needed to finish
-     * installing them, whether security updates install themselves, and
-     * whether Ubuntu Pro's extended support is on. Other systems: null.
+     * installing them (since when, and whether it's for a new kernel),
+     * which kernel is running (Ubuntu), whether security updates install
+     * themselves, and whether Ubuntu Pro's extended support is on. Other
+     * systems: null.
      *
-     * @return array{securityUpdates: int|null, restartPending: bool, autoUpdates: bool, extendedSupport: bool}|null
+     * @return array{securityUpdates: int|null, restartPending: bool|null, restartPendingSince: string|null, restartForKernel: bool|null, kernel: array{version: string, flavour: string}|null, autoUpdates: bool, extendedSupport: bool}|null
      */
     private static function patching(?string $id): ?array
     {
@@ -143,9 +145,63 @@ final class Stack
 
         return [
             'securityUpdates' => $security,
-            'restartPending' => self::exists('/var/run/reboot-required'),
+            ...self::restart(),
+            'kernel' => $id === 'ubuntu' ? self::kernel() : null,
             'autoUpdates' => preg_match('/APT::Periodic::Unattended-Upgrade\s+"1"/', (string) self::read('/etc/apt/apt.conf.d/20auto-upgrades')) === 1,
             'extendedSupport' => self::exists('/etc/apt/sources.list.d/ubuntu-esm-infra.sources') || self::exists('/etc/apt/sources.list.d/ubuntu-esm-infra.list'),
+        ];
+    }
+
+    /**
+     * The running kernel's build and flavour, from the line Ubuntu writes for
+     * exactly this: "Ubuntu 5.15.0-125.135-generic 5.15.167" becomes
+     * 5.15.0-125.135 and generic. SkyLock looks up what that build is missing.
+     * Anything else (a custom kernel, a file it can't read) is null.
+     *
+     * @return array{version: string, flavour: string}|null
+     */
+    private static function kernel(): ?array
+    {
+        $signature = trim((string) self::read('/proc/version_signature'));
+        $pattern = '/^Ubuntu (\d+\.\d+\.\d+-\d+\.\d+(?:\.\d+)?(?:~\d+\.\d+(?:\.\d+)?)?)-([a-z][a-z0-9]*(?:-[a-z0-9]+)*) \d/';
+
+        if (preg_match($pattern, $signature, $match) !== 1 || strlen($match[1]) > 40 || strlen($match[2]) > 30) {
+            return null;
+        }
+
+        return ['version' => $match[1], 'flavour' => $match[2]];
+    }
+
+    /**
+     * Whether a restart is pending (the flag file Debian and Ubuntu write),
+     * when the flag was last written, and whether a new kernel is among the
+     * packages waiting on it. Every install that needs a restart writes the
+     * flag again, so the time means "pending since at least". Only a yes or
+     * no about the kernel leaves the server, never the package names.
+     *
+     * Null when it can't look: open_basedir hides /var/run, and "couldn't
+     * check" must never read as "no restart needed".
+     *
+     * @return array{restartPending: bool|null, restartPendingSince: string|null, restartForKernel: bool|null}
+     */
+    private static function restart(): array
+    {
+        if (! @is_dir(self::$root.'/var/run')) {
+            return ['restartPending' => null, 'restartPendingSince' => null, 'restartForKernel' => null];
+        }
+
+        $flag = self::$root.'/var/run/reboot-required';
+        if (! @file_exists($flag)) {
+            return ['restartPending' => false, 'restartPendingSince' => null, 'restartForKernel' => null];
+        }
+
+        $written = @filemtime($flag);
+        $packages = self::read('/var/run/reboot-required.pkgs');
+
+        return [
+            'restartPending' => true,
+            'restartPendingSince' => $written === false ? null : gmdate('Y-m-d\TH:i:s\Z', $written),
+            'restartForKernel' => $packages === null ? null : preg_match('/^linux-(?:image|modules|base)\b/m', $packages) === 1,
         ];
     }
 
