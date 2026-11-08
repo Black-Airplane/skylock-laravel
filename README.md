@@ -49,8 +49,9 @@ Only these, and nothing else:
   - Whether an error monitor (Sentry, Bugsnag, Flare, Honeybadger, Rollbar, Nightwatch) is configured: one boolean.
 
   It reads plain files and asks PHP and the app's own connections; it never runs a command. Anything it can't read is sent as nothing.
-- **When your schedule changes:** each scheduled task's cron expression, time zone, a label (its `->description()`, or just the command's name, such as `backup:run`) and a key that's a hash of its full command.
+- **When your schedule changes:** each scheduled task's cron expression, time zone, a label (its `->description()`, or just the command's name, such as `backup:run`) and a key that's a hash of its full command. Tasks limited to other environments (`->environments('production')` on staging) are left out: they never run there.
 - **When a scheduled task starts, finishes or fails:** its key, and how long it took. A task that repeats within the minute (`everyFifteenSeconds()` and the like) is reported for its first run each minute, every failure, and the first success after one.
+- **When the scheduler skips a task that was due:** its key, and why, as one of three words: `condition` (its own `when()`, `skip()`, `between()` or the like said not to run), `overlapping` (an earlier run still holds its `withoutOverlapping()` lock) or `paused` (`schedule:pause`). Laravel says only that it skipped the task, so the reporter asks what Laravel asked, in the same order. SkyLock counts only `condition` as on time; a held lock or a paused schedule still makes the task late, with that as the cause. A skip it can't explain (the cache can't be read) isn't sent, so the task goes late as it always did. A task that repeats within the minute has its skips sent once a minute, and again when the reason changes.
 - **When the queued work a scheduled task started finishes or fails:** the same events, noted by the queue worker and sent with the next minute report. See [Queued jobs](#queued-jobs).
 
 ### Queued jobs

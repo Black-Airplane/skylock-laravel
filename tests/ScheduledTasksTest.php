@@ -39,6 +39,16 @@ it('lists the app’s schedule, leaving out its own report', function () {
         ->and(collect($schedule->events())->contains(fn ($event) => ScheduledTasks::isOwn($event)))->toBeTrue();
 });
 
+it('leaves out tasks for other environments, which never run here', function () {
+    reporterConfigured();
+    $schedule = app(Schedule::class);
+    $schedule->command('backup:run')->dailyAt('02:00')->environments(['production']);
+    $schedule->command('telescope:prune')->daily()->environments(['testing', 'staging']);
+    $schedule->command('queue:prune-batches')->daily();
+
+    expect(collect(ScheduledTasks::all($schedule))->pluck('label')->all())->toBe(['telescope:prune', 'queue:prune-batches']);
+});
+
 it('strips control characters from labels', function () {
     $event = scheduledEvent("'/usr/bin/php' 'artisan' reports:send")->description("Client\u{0007} reports\n");
 
