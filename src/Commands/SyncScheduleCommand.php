@@ -17,8 +17,10 @@ class SyncScheduleCommand extends Command
     public function handle(SkyLockClient $client, Schedule $schedule): int
     {
         $tasks = ScheduledTasks::all($schedule);
-        if ($client->send('PUT', 'schedule', ['tasks' => $tasks]) === null) {
-            $this->components->error('SkyLock didn\'t accept the schedule. Check SKYLOCK_REPORTER_URL and SKYLOCK_REPORTER_TOKEN.');
+        if ($client->send('PUT', 'schedule', ['tasks' => $tasks], force: true) === null) {
+            $this->components->error($client->revoked()
+                ? 'SkyLock no longer accepts this token: its application was retired or its client was offboarded.'
+                : 'SkyLock didn\'t accept the schedule. Check SKYLOCK_REPORTER_URL and SKYLOCK_REPORTER_TOKEN.');
 
             return self::FAILURE;
         }

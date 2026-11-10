@@ -11,9 +11,15 @@ use Throwable;
  * Talks to SkyLock. It never throws and never waits long: a monitoring
  * outage must not become your app's outage. Failures are logged at most
  * once every ten minutes.
+ *
+ * Once SkyLock says the token is revoked (see Revocation), it sends nothing
+ * but the minute report once a day, to find out whether it's been restored.
  */
 final class SkyLockClient
 {
+    /** The last send didn't go through because SkyLock revoked the token. */
+    private bool $revoked = false;
+
     public function configured(): bool
     {
         return is_string(config('skylock-reporter.token')) && config('skylock-reporter.token') !== '';
@@ -21,11 +27,20 @@ final class SkyLockClient
 
     /**
      * @param  array<string, mixed>  $payload
+     * @param  bool  $force  send even when the token was revoked (someone ran a command to check)
      * @return array<string, mixed>|null the response, or null when it didn't get through
      */
-    public function send(string $method, string $path, array $payload): ?array
+    public function send(string $method, string $path, array $payload, bool $force = false): ?array
     {
+        $this->revoked = false;
         if (! $this->configured()) {
+            return null;
+        }
+
+        $held = Revocation::active();
+        if ($held && ! $force && ($path !== 'health' || ! Revocation::due())) {
+            $this->revoked = true;
+
             return null;
         }
 
@@ -37,7 +52,19 @@ final class SkyLockClient
                 ->send($method, rtrim((string) config('skylock-reporter.url'), '/').'/api/ingest/'.$path, ['json' => $payload]);
 
             if ($response->successful()) {
+                if ($held) {
+                    Revocation::clear();
+                }
+
                 return (array) $response->json();
+            }
+
+            // Only SkyLock's own answer: a 410 from anything in between doesn't say `revoked`.
+            if ($response->status() === 410 && $response->json('revoked') === true) {
+                Revocation::mark();
+                $this->revoked = true;
+
+                return null;
             }
 
             $this->warn("SkyLock answered {$response->status()} to {$path}.");
@@ -46,6 +73,11 @@ final class SkyLockClient
         }
 
         return null;
+    }
+
+    public function revoked(): bool
+    {
+        return $this->revoked;
     }
 
     private function warn(string $message): void

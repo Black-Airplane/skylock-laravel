@@ -4,7 +4,9 @@ namespace BlackAirplane\SkyLockReporter;
 
 use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Contracts\Cache\Repository;
 use Illuminate\Support\Str;
+use Throwable;
 
 /**
  * How the app's scheduled tasks are described to SkyLock. A task's key is
@@ -20,7 +22,8 @@ final class ScheduledTasks
     {
         $tasks = [];
         foreach ($schedule->events() as $event) {
-            if (self::isOwn($event)) {
+            // A task for other environments (`->environments('production')`) never runs here.
+            if (self::isOwn($event) || ! $event->runsInEnvironment((string) app()->environment())) {
                 continue;
             }
             $tasks[self::key($event)] = [
@@ -47,6 +50,35 @@ final class ScheduledTasks
     }
 
     /**
+     * Why the scheduler skipped a task that was due. Laravel says only that it
+     * did (`ScheduledTaskSkipped`), and says it the same way for a paused
+     * schedule, a held `withoutOverlapping()` lock and the task's own
+     * condition (`when()`, `skip()`, `between()` and the like), so this asks
+     * what Laravel asked, in the order it asked. SkyLock counts only a
+     * condition as on time, so a skip it can't be sure of isn't sent: if the
+     * cache can't be read, the task goes late as it always did.
+     *
+     * @return 'paused'|'overlapping'|'condition'|null
+     */
+    public static function skipReason(Event $event, Repository $cache): ?string
+    {
+        try {
+            if (self::schedulePaused($cache) && ! $event->runsWhenPaused()) {
+                return 'paused';
+            }
+
+            // withoutOverlapping() is itself a skip() on this lock.
+            if ($event->withoutOverlapping && $event->mutex->exists($event)) {
+                return 'overlapping';
+            }
+        } catch (Throwable) {
+            return null;
+        }
+
+        return 'condition';
+    }
+
+    /**
      * The report itself shouldn't be reported on.
      */
     public static function isOwn(Event $event): bool
@@ -63,6 +95,16 @@ final class ScheduledTasks
         $command = str_contains($command, 'artisan') ? Str::after($command, 'artisan') : $command;
 
         return trim(str_replace(["'", '"'], '', $command));
+    }
+
+    /**
+     * `schedule:pause` (Laravel 12.x and later), read the way `schedule:run` reads it.
+     */
+    private static function schedulePaused(Repository $cache): bool
+    {
+        return property_exists(Schedule::class, 'pausable')
+            && Schedule::$pausable
+            && (bool) $cache->get('illuminate:schedule:paused', false);
     }
 
     private static function timezone(Event $event): string

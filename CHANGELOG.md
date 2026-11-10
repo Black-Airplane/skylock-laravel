@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.3
+
+- Skipped tasks are reported, with why. Laravel's scheduler skips a task that's due when its own condition says not to run (`when()`, `skip()`, `between()` and the like), when an earlier run still holds its `withoutOverlapping()` lock (which Laravel checks as a `skip()`), or when the schedule is paused, and says only that it skipped it, the same way for all three. SkyLock heard nothing, so a task meant for the first Sunday of each month (a weekly cron and a `when()`) looked late on every other Sunday. Now the reporter asks what Laravel asked, in the same order, and sends `condition`, `overlapping` or `paused`.
+- SkyLock counts only `condition` as on time. A held lock or a paused schedule still makes the task late, as before, and the outage now says which.
+- A skip the reporter can't explain (the cache can't be read) isn't sent, so the task goes late as it always did. A task that repeats within the minute has its skips sent once a minute, and again when the reason changes. The reporter's own report is never reported.
+- Tasks limited to other environments (`->environments('production')`) are left out of the schedule a reporter sends: they never run in its environment, so SkyLock expected them there forever.
+- The reporter stops when SkyLock revokes its token. When an application is retired in SkyLock, or its client offboarded, SkyLock answers `410 Gone` with `"revoked": true`; the reporter then sends nothing (its health checks don't run, task events and queued work aren't sent or kept), logs a warning once, and checks once a day whether it's been restored. A new token, or `skylock:test`, resumes it at once. A `410` without `revoked`, a `401` or an outage changes nothing. Before, it tried again every minute, forever.
+- SkyLock takes skips from November 8, 2026, and answers revoked tokens `410` from November 10, 2026.
+
 ## 0.4.2
 
 - A pending restart now says since when and what it's for. On Debian and Ubuntu, the reporter sends when the restart flag was last written (each install that needs a restart writes it again, so it's "at least since") and whether a new kernel is among the packages waiting on it: one boolean, never the package names. SkyLock dates the restart from the server instead of from when it first heard, and says when it's a kernel update.

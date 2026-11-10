@@ -8,9 +8,9 @@ use Illuminate\Support\Facades\Date;
 use Throwable;
 
 /**
- * Tells SkyLock when scheduled tasks start, finish and fail. These are sent
- * from inside schedule:run, before and after each task, so they mustn't hold
- * the scheduler up.
+ * Tells SkyLock when scheduled tasks start, finish, fail or are skipped (and
+ * why). These are sent from inside schedule:run, before and after each task,
+ * so they mustn't hold the scheduler up.
  *
  * - A task that repeats within the minute (`everyFifteenSeconds()` and the
  *   like) is reported for its first run each minute, every failure, and the
@@ -45,13 +45,16 @@ final class TaskEvents
     }
 
     /**
-     * @param  'starting'|'finished'|'failed'  $event
+     * @param  'starting'|'finished'|'failed'|'skipped'  $event
+     * @param  'paused'|'overlapping'|'condition'|null  $reason  why a task was skipped
      */
-    public function send(Event $task, string $event, ?int $durationMs = null): void
+    public function send(Event $task, string $event, ?int $durationMs = null, ?string $reason = null): void
     {
         $key = ScheduledTasks::key($task);
+        // A repeating task skipped for a new reason within the minute is news.
+        $kind = $reason === null ? $event : "{$event}:{$reason}";
 
-        if ($task->isRepeatable() && ! $this->firstOrChangedThisMinute($key, $event)) {
+        if ($task->isRepeatable() && ! $this->firstOrChangedThisMinute($key, $kind)) {
             return;
         }
 
@@ -59,7 +62,7 @@ final class TaskEvents
             return;
         }
 
-        $response = $this->post($key, $event, $durationMs);
+        $response = $this->post($key, $event, $durationMs, $reason);
 
         if ($response === null) {
             $this->pausedUntil = Date::now()->addSeconds(self::PAUSE_SECONDS);
@@ -70,7 +73,7 @@ final class TaskEvents
         $this->pausedUntil = null;
 
         if ($task->isRepeatable() && $event !== 'failed') {
-            $this->sentInMinute["{$key}|{$event}"] = $this->minute();
+            $this->sentInMinute["{$key}|{$kind}"] = $this->minute();
             if ($event === 'finished') {
                 unset($this->failing[$key]);
             }
@@ -93,12 +96,13 @@ final class TaskEvents
     /**
      * @return array<string, mixed>|null
      */
-    private function post(string $key, string $event, ?int $durationMs): ?array
+    private function post(string $key, string $event, ?int $durationMs, ?string $reason = null): ?array
     {
         // Sent inside the app's own task or job, so Nightwatch would put it on that record.
         return NightwatchSampling::ignore(fn (): ?array => $this->client->send('POST', 'task-events', array_filter([
             'key' => $key,
             'event' => $event,
+            'reason' => $reason,
             'durationMs' => $durationMs,
         ], fn ($value) => $value !== null)));
     }

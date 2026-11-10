@@ -9,6 +9,7 @@ use Illuminate\Console\Events\CommandStarting;
 use Illuminate\Console\Events\ScheduledBackgroundTaskFinished;
 use Illuminate\Console\Events\ScheduledTaskFailed;
 use Illuminate\Console\Events\ScheduledTaskFinished;
+use Illuminate\Console\Events\ScheduledTaskSkipped;
 use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
@@ -78,6 +79,7 @@ class SkyLockReporterServiceProvider extends ServiceProvider
         Events::listen(ScheduledTaskFinished::class, fn (ScheduledTaskFinished $event) => $this->task($event->task, $this->failed($event->task) ? 'failed' : 'finished', (int) round($event->runtime * 1000), runEnded: true));
         Events::listen(ScheduledBackgroundTaskFinished::class, fn (ScheduledBackgroundTaskFinished $event) => $this->task($event->task, $this->failed($event->task) ? 'failed' : 'finished'));
         Events::listen(ScheduledTaskFailed::class, fn (ScheduledTaskFailed $event) => $this->task($event->task, 'failed', runEnded: true));
+        Events::listen(ScheduledTaskSkipped::class, fn (ScheduledTaskSkipped $event) => $this->skipped($event->task));
 
         $this->followQueuedWork();
     }
@@ -97,6 +99,22 @@ class SkyLockReporterServiceProvider extends ServiceProvider
         Events::listen(JobFailed::class, fn (JobFailed $event) => $runs()->jobFailed($event->job));
         // The worker kills the process right after, so nothing else would tell SkyLock.
         Events::listen(JobTimedOut::class, fn (JobTimedOut $event) => $runs()->jobFailed($event->job));
+    }
+
+    /**
+     * Due, but not run. Sent with why, or not at all when the reporter can't
+     * tell (see ScheduledTasks::skipReason).
+     */
+    private function skipped(Event $task): void
+    {
+        if (ScheduledTasks::isOwn($task)) {
+            return;
+        }
+
+        $reason = ScheduledTasks::skipReason($task, $this->app->make('cache.store'));
+        if ($reason !== null) {
+            $this->app->make(TaskEvents::class)->send($task, 'skipped', reason: $reason);
+        }
     }
 
     private function failed(Event $task): bool

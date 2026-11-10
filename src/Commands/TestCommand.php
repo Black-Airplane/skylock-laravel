@@ -35,9 +35,16 @@ class TestCommand extends Command
             $stack,
         ));
 
-        $sent = $client->send('POST', 'health', [...ReportCommand::payload($results), 'stackHash' => ReportCommand::hash($stack), 'stackCollectedAt' => $read['collectedAt']]);
+        // Sent even when SkyLock revoked the token: this is how to find out it's been restored.
+        $sent = $client->send('POST', 'health', [...ReportCommand::payload($results), 'stackHash' => ReportCommand::hash($stack), 'stackCollectedAt' => $read['collectedAt']], force: true);
         if ($sent !== null && array_key_exists('stackKnown', $sent)) {
             $client->send('PUT', 'stack', ReportCommand::stackPayload($read));
+        }
+
+        if ($sent === null && $client->revoked()) {
+            $this->components->error('SkyLock no longer accepts this token: its application was retired or its client was offboarded. Remove the package, or ask an Owner or Admin for a new token.');
+
+            return self::FAILURE;
         }
 
         if ($sent === null) {
