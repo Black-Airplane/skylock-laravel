@@ -20,6 +20,12 @@ class TestCommand extends Command
             return self::FAILURE;
         }
 
+        if (! $client->secure()) {
+            $this->components->error('SKYLOCK_REPORTER_URL must start with https://, so the token is never sent unencrypted. Nothing was sent.');
+
+            return self::FAILURE;
+        }
+
         $results = $checks->run();
         $this->table(['Check', 'Status', 'Value'], array_map(fn (array $result): array => [
             $result['name'],

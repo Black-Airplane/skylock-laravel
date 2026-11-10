@@ -70,8 +70,12 @@ final class Revocation
         }
     }
 
+    /**
+     * Tells one token from another without being the token, or the plain
+     * SHA-256 SkyLock knows it by: a hash made for this file and nothing else.
+     */
     private static function fingerprint(): string
     {
-        return hash('sha256', (string) config('skylock-reporter.token'));
+        return hash_hmac('sha256', 'skylock-reporter:revoked', (string) config('skylock-reporter.token'));
     }
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.4
+
+Security hardening. Upgrade to it.
+
+- A scheduled task's label could carry part of its command. Without a `->description()`, the label was the command's first word, so `Schedule::exec('API_KEY=... ./bin/sync.sh')` sent `API_KEY=...`, a command with "artisan" anywhere in it (a URL, say) sent whatever followed that word, and a program run by its full path sent the path. Now the only thing taken from a command is one name: the artisan command (`backup:run`) or the program's file name (`sync.sh`), past any variables set in front of it, and only if it's made of letters, numbers and `. _ : -`. A command with no such name is labelled "Scheduled task". Descriptions are sent as before.
+- If your schedule has a `Schedule::exec()` task with no description, check what its label was in SkyLock, and rotate anything it showed. Artisan commands, jobs and closures weren't affected. SkyLock stops keeping such labels at its end too, whatever version sends them.
+- A task's key hasn't changed, so SkyLock keeps each task's history. Where a label changes, the schedule is sent once more.
+- The reporter sends over https only. With `SKYLOCK_REPORTER_URL` set to an `http://` address, the token crossed the network unencrypted every minute; now nothing is sent, the log says why (once every ten minutes), and `skylock:test` says so. An app in the `local` or `testing` environment may still use `http://`, for a SkyLock on a developer's machine.
+- It never follows a redirect. A report goes to the address it was given or nowhere.
+- `storage/framework/cache/skylock-reporter.json` is written readable by the app's own user alone (mode 0600), and the note it keeps of a revoked token is no longer the token's plain SHA-256, which is how SkyLock knows the token. Neither let anyone report as the app; the file says what the server runs on, which is nobody else's to read on a shared machine. If the scheduler and the queue workers run as different users, a worker can no longer read that the token was revoked, and keeps its notes in the cache until they expire, as it does when SkyLock is unreachable.
+- Results from spatie/laravel-health are sent only with one of its five statuses; a result with any other is left out. The web PHP's version and SAPI, which pass through the app's cache, are checked before they're sent. SkyLock already refused anything else; now it doesn't leave the app.
+- Tests hold the package's promises against every file in it: no command run and no code evaluated anywhere, one class that talks to SkyLock and nothing that talks to anything else, one file written, no exception text read. And every field of every payload is on a list a test checks, so sending something new is a deliberate change.
+
 ## 0.4.3
 
 - Skipped tasks are reported, with why. Laravel's scheduler skips a task that's due when its own condition says not to run (`when()`, `skip()`, `between()` and the like), when an earlier run still holds its `withoutOverlapping()` lock (which Laravel checks as a `skip()`), or when the schedule is paused, and says only that it skipped it, the same way for all three. SkyLock heard nothing, so a task meant for the first Sunday of each month (a weekly cron and a `when()`) looked late on every other Sunday. Now the reporter asks what Laravel asked, in the same order, and sends `condition`, `overlapping` or `paused`.

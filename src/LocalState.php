@@ -11,6 +11,9 @@ use Throwable;
  * when the cache is the database, nothing in Nightwatch. It's per server,
  * which suits what it holds, since each server reads its own stack. When it
  * can't be read or written, the reporter reads or sends again instead.
+ *
+ * Only the user the app runs as can read it (mode 0600): it says what the
+ * server runs on, which is nobody else's to know on a shared machine.
  */
 final class LocalState
 {
@@ -34,6 +37,9 @@ final class LocalState
             // Written beside it and moved into place, so a reader never sees half a file.
             $temporary = $path.'.'.bin2hex(random_bytes(4)).'.tmp';
             $json = json_encode([...self::all(), $key => $value], JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+            // Closed before anything is written to it, and the move keeps the mode.
+            @touch($temporary);
+            @chmod($temporary, 0600);
             if (@file_put_contents($temporary, $json) === false || ! @rename($temporary, $path)) {
                 @unlink($temporary);
             }

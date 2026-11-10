@@ -12,6 +12,10 @@ use Throwable;
  * outage must not become your app's outage. Failures are logged at most
  * once every ten minutes.
  *
+ * It sends over https only, so the token never crosses a network in the
+ * clear, and never follows a redirect: a report goes to the address it was
+ * given or nowhere.
+ *
  * Once SkyLock says the token is revoked (see Revocation), it sends nothing
  * but the minute report once a day, to find out whether it's been restored.
  */
@@ -26,6 +30,19 @@ final class SkyLockClient
     }
 
     /**
+     * Whether SKYLOCK_REPORTER_URL is one the token can be sent to: https.
+     * Plain http is for a SkyLock on a developer's own machine, so only an
+     * app in the local or testing environment may use it.
+     */
+    public function secure(): bool
+    {
+        $url = strtolower($this->url());
+
+        return str_starts_with($url, 'https://')
+            || (str_starts_with($url, 'http://') && app()->environment('local', 'testing'));
+    }
+
+    /**
      * @param  array<string, mixed>  $payload
      * @param  bool  $force  send even when the token was revoked (someone ran a command to check)
      * @return array<string, mixed>|null the response, or null when it didn't get through
@@ -34,6 +51,12 @@ final class SkyLockClient
     {
         $this->revoked = false;
         if (! $this->configured()) {
+            return null;
+        }
+
+        if (! $this->secure()) {
+            $this->warn('SKYLOCK_REPORTER_URL must start with https://, so nothing was sent.');
+
             return null;
         }
 
@@ -49,7 +72,8 @@ final class SkyLockClient
                 ->acceptJson()
                 ->timeout((int) config('skylock-reporter.timeout', 3))
                 ->connectTimeout(2)
-                ->send($method, rtrim((string) config('skylock-reporter.url'), '/').'/api/ingest/'.$path, ['json' => $payload]);
+                ->withoutRedirecting()
+                ->send($method, $this->url().'/api/ingest/'.$path, ['json' => $payload]);
 
             if ($response->successful()) {
                 if ($held) {
@@ -78,6 +102,11 @@ final class SkyLockClient
     public function revoked(): bool
     {
         return $this->revoked;
+    }
+
+    private function url(): string
+    {
+        return rtrim(trim((string) config('skylock-reporter.url')), '/');
     }
 
     private function warn(string $message): void

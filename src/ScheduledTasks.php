@@ -11,7 +11,7 @@ use Throwable;
 /**
  * How the app's scheduled tasks are described to SkyLock. A task's key is
  * a hash of its full command, so arguments and options never leave the app;
- * its label is the task's description, or just the command's name.
+ * its label is the task's description, or just the name of what it runs.
  */
 final class ScheduledTasks
 {
@@ -42,11 +42,63 @@ final class ScheduledTasks
         return sha1(self::command($event).'|'.$event->expression.'|'.self::timezone($event));
     }
 
+    /**
+     * The task's description, in the words whoever wrote the schedule chose.
+     * Without one, the name of what it runs and nothing after it: an artisan
+     * command (`backup:run`) or a program's file name (`sync.sh`).
+     *
+     * A command line can hold anything: a variable set in front of it, a URL
+     * with a key in it, a path that names the client. So nothing is copied
+     * from one but a single name of letters, numbers and . _ : -, and a
+     * command that has no such name is just "Scheduled task".
+     */
     public static function label(Event $event): string
     {
-        $label = $event->description !== null && $event->description !== '' ? $event->description : (Str::before(self::command($event), ' ') ?: 'Scheduled task');
+        $description = trim((string) preg_replace('/\p{C}+/u', ' ', (string) $event->description));
+        if ($description !== '') {
+            return mb_substr($description, 0, 120);
+        }
 
-        return mb_substr(trim((string) preg_replace('/\p{C}+/u', ' ', $label)), 0, 120);
+        if ($event->command === null) {
+            return 'closure';
+        }
+
+        return self::name($event->command) ?? 'Scheduled task';
+    }
+
+    /**
+     * The artisan command a command line runs, or else its program's file name.
+     */
+    private static function name(string $command): ?string
+    {
+        // Words as a shell would split them, so a quoted value with spaces stays one word.
+        preg_match_all('/(?:[^\s"\']+|"[^"]*"|\'[^\']*\')+/', $command, $matches);
+        $words = $matches[0];
+        $bare = fn (string $word): string => str_replace(['"', "'", '\\'], ['', '', '/'], $word);
+
+        // `php artisan backup:run --only-db`, wherever PHP and artisan live: the word after artisan.
+        foreach ($words as $i => $word) {
+            if (basename($bare($word)) === 'artisan' && ! str_contains($word, '://')) {
+                $name = $bare($words[$i + 1] ?? '');
+                if (preg_match('/^[A-Za-z][A-Za-z0-9:_.-]{0,119}$/', $name) === 1) {
+                    return $name;
+                }
+
+                break;
+            }
+        }
+
+        // Anything else: the program's file name, past any variables set in front of it.
+        foreach ($words as $word) {
+            if (preg_match('/^[A-Za-z_][A-Za-z0-9_]*=/', $word) === 1) {
+                continue;
+            }
+            $name = basename($bare($word));
+
+            return preg_match('/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/', $name) === 1 ? $name : null;
+        }
+
+        return null;
     }
 
     /**
