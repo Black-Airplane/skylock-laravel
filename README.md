@@ -49,7 +49,7 @@ Only these, and nothing else:
   - Whether an error monitor (Sentry, Bugsnag, Flare, Honeybadger, Rollbar, Nightwatch) is configured: one boolean.
 
   It reads plain files and asks PHP and the app's own connections; it never runs a command. Anything it can't read is sent as nothing.
-- **When your schedule changes:** each scheduled task's cron expression, time zone, a label (its `->description()`, or just the command's name, such as `backup:run`) and a key that's a hash of its full command. Tasks limited to other environments (`->environments('production')` on staging) are left out: they never run there.
+- **When your schedule changes:** each scheduled task's cron expression, time zone, a label and a key that's a hash of its full command. The label is the task's `->description()` if it has one. Otherwise it's a single name taken from the command and nothing else: the artisan command (`backup:run`) or the program's file name (`sync.sh`), never a variable set in front of it, a path, a URL or an argument; a command with no plain name is "Scheduled task". Tasks limited to other environments (`->environments('production')` on staging) are left out: they never run there.
 - **When a scheduled task starts, finishes or fails:** its key, and how long it took. A task that repeats within the minute (`everyFifteenSeconds()` and the like) is reported for its first run each minute, every failure, and the first success after one.
 - **When the scheduler skips a task that was due:** its key, and why, as one of three words: `condition` (its own `when()`, `skip()`, `between()` or the like said not to run), `overlapping` (an earlier run still holds its `withoutOverlapping()` lock) or `paused` (`schedule:pause`). Laravel says only that it skipped the task, so the reporter asks what Laravel asked, in the same order. SkyLock counts only `condition` as on time; a held lock or a paused schedule still makes the task late, with that as the cause. A skip it can't explain (the cache can't be read) isn't sent, so the task goes late as it always did. A task that repeats within the minute has its skips sent once a minute, and again when the reason changes.
 - **When the queued work a scheduled task started finishes or fails:** the same events, noted by the queue worker and sent with the next minute report. See [Queued jobs](#queued-jobs).
@@ -66,7 +66,7 @@ Workers don't wait on SkyLock. A worker notes how the work went in the app's cac
 
 The payload gains a `skylock` entry (the task key, a random run id, and how far out the job is). The scheduler and the workers note a run's progress in the app's cache for up to two days, so both need the same cache store, as Laravel's scheduler already does for its own locks.
 
-It never sends error messages, exception text, hostnames, addresses, connection names, queries, environment variables (names or values), command arguments or anything a user entered. A report that can't get through is dropped after three seconds, and the reporter never throws. Task events are sent from inside the scheduler, so after one doesn't get through, tasks that run again within two minutes skip SkyLock for a minute (their next run reports them): an unreachable SkyLock costs your scheduler about one timeout a minute, however many tasks it runs. Failures, and tasks that run less often, are always sent.
+It never sends error messages, exception text, hostnames, addresses, connection names, queries, environment variables (names or values), command arguments or anything a user entered. It sends over https only (an `http://` address is refused outside the `local` and `testing` environments, so the token never crosses a network unencrypted) and never follows a redirect. A report that can't get through is dropped after three seconds, and the reporter never throws. Task events are sent from inside the scheduler, so after one doesn't get through, tasks that run again within two minutes skip SkyLock for a minute (their next run reports them): an unreachable SkyLock costs your scheduler about one timeout a minute, however many tasks it runs. Failures, and tasks that run less often, are always sent.
 
 ## When SkyLock stops accepting the token
 
@@ -95,7 +95,7 @@ php artisan vendor:publish --tag=skylock-reporter
 | `timeout` | 3 | Seconds to wait for SkyLock before giving up |
 | `nightwatch_sample_rate` | 0.01 | The share of minute reports Laravel Nightwatch records (`SKYLOCK_REPORTER_NIGHTWATCH_SAMPLE_RATE`) |
 
-Between minutes the reporter keeps a few things on the server, in `storage/framework/cache/skylock-reporter.json`: the schedule's hash and what the app runs on (the same facts it sends), and, once SkyLock has revoked the token, a fingerprint of that token and when to check again. It uses the app's cache only to check the cache works, and to note the web PHP.
+Between minutes the reporter keeps a few things on the server, in `storage/framework/cache/skylock-reporter.json`: the schedule's hash and what the app runs on (the same facts it sends), and, once SkyLock has revoked the token, a fingerprint of that token (a hash made for this file alone, not the token or anything SkyLock holds) and when to check again. The file is readable only by the user the app runs as. It uses the app's cache only to check the cache works, and to note the web PHP.
 
 ## With Laravel Nightwatch
 

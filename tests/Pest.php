@@ -1,6 +1,7 @@
 <?php
 
 use BlackAirplane\SkyLockReporter\SkyLockReporterServiceProvider;
+use BlackAirplane\SkyLockReporter\Stack;
 use BlackAirplane\SkyLockReporter\Tests\TestCase;
 use Illuminate\Console\Scheduling\CacheEventMutex;
 use Illuminate\Console\Scheduling\Event;
@@ -52,4 +53,37 @@ function skyLock(array $labels, bool|ArrayObject $reachable = true): ArrayObject
     });
 
     return $sent;
+}
+
+/**
+ * A file on the pretend server (the test sets `$this->root` and points Stack::$root at it).
+ */
+function serverFile(string $path, string $contents = ''): void
+{
+    $full = test()->root.$path;
+    @mkdir(dirname($full), recursive: true);
+    file_put_contents($full, $contents);
+}
+
+function ubuntuServer(): void
+{
+    serverFile('/etc/os-release', "NAME=\"Ubuntu\"\nVERSION_ID=\"22.04\"\nID=ubuntu\nPRETTY_NAME=\"Ubuntu 22.04.5 LTS\"\n");
+    serverFile('/etc/machine-id', "0123456789abcdef0123456789abcdef\n");
+    serverFile('/var/lib/update-notifier/updates-available', "\n12 updates can be applied immediately.\n4 of these updates are standard security updates.\nTo see these additional updates run: apt list --upgradable\n");
+    serverFile('/var/run/reboot-required', "*** System restart required ***\n");
+    serverFile('/var/run/reboot-required.pkgs', "linux-image-5.15.0-126-generic\nlinux-base\n");
+    serverFile('/proc/version_signature', "Ubuntu 5.15.0-125.135-generic 5.15.167\n");
+    touch(test()->root.'/var/run/reboot-required', strtotime('2026-10-30 02:05:00 UTC'));
+    serverFile('/etc/apt/apt.conf.d/20auto-upgrades', "APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n");
+}
+
+/**
+ * What it reads about patching on an Ubuntu server. Called directly, so it
+ * runs anywhere: telling which system this is reads /etc, which is Linux only.
+ *
+ * @return array<string, mixed>|null
+ */
+function ubuntuPatching(): ?array
+{
+    return Closure::bind(fn (): ?array => Stack::patching('ubuntu'), null, Stack::class)();
 }

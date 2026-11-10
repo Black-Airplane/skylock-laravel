@@ -6,6 +6,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Schema;
+use Spatie\Health\ResultStores\ResultStore;
 
 function names(array $results): array
 {
@@ -123,4 +124,39 @@ it('checks the cache with a write and a read, and nothing left to delete', funct
     expect($first['status'])->toBe('pass')
         ->and($broken['status'])->toBe('fail')
         ->and($calls)->not->toContain('ForgettingKey', 'KeyForgotten');
+});
+
+it('sends laravel-health’s results as a name and a status from its fixed list, and nothing it says besides', function () {
+    require_once __DIR__.'/Stubs/LaravelHealth.php';
+
+    $result = fn (string $name, string $label, string $status): object => (object) [
+        'name' => $name,
+        'label' => $label,
+        'status' => $status,
+        'notificationMessage' => 'SQLSTATE[HY000] connection to db-7.internal refused',
+        'shortSummary' => 'db-7.internal',
+        'meta' => ['host' => 'db-7.internal'],
+    ];
+    app()->instance(ResultStore::class, new class($result) implements ResultStore
+    {
+        public function __construct(private readonly Closure $result) {}
+
+        public function latestResults(): ?object
+        {
+            return (object) ['storedCheckResults' => [
+                ($this->result)('Database', '', 'ok'),
+                ($this->result)('UsedDiskSpace', 'Disk <space>', 'Warning'),
+                ($this->result)('Horizon', '', 'crashed'),
+                ($this->result)('Redis', '', 'connection to cache-2.internal refused'),
+            ]];
+        }
+    });
+
+    $results = array_slice(app(HealthChecks::class)->run(), -3);
+
+    expect($results)->toBe([
+        ['name' => 'Database', 'status' => 'ok'],
+        ['name' => 'Disk  space', 'status' => 'warning'],
+        ['name' => 'Horizon', 'status' => 'crashed'],
+    ])->and(json_encode(app(HealthChecks::class)->run()))->not->toContain('internal');
 });

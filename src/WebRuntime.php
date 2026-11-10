@@ -65,7 +65,11 @@ final class WebRuntime
             return null;
         }
 
-        return is_array($runtime) && is_string($runtime['version'] ?? null) && is_string($runtime['sapi'] ?? null)
+        // The cache is shared with the app, so what comes back is checked like anything else read:
+        // a version and a SAPI name in the characters those have, or nothing.
+        return is_array($runtime)
+            && is_string($runtime['version'] ?? null) && preg_match('/^[0-9A-Za-z.+\-]{1,32}$/', $runtime['version']) === 1
+            && is_string($runtime['sapi'] ?? null) && preg_match('/^[a-z0-9._-]{1,32}$/', $runtime['sapi']) === 1
             ? ['version' => $runtime['version'], 'sapi' => $runtime['sapi']]
             : null;
     }

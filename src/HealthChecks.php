@@ -15,6 +15,9 @@ use Throwable;
  */
 final class HealthChecks
 {
+    /** The statuses spatie/laravel-health gives a result. Any other word stays in the app. */
+    private const LARAVEL_HEALTH_STATUSES = ['ok', 'warning', 'failed', 'crashed', 'skipped'];
+
     /**
      * @return list<array{name: string, status: string, value?: float|int, unit?: string}>
      */
@@ -144,7 +147,11 @@ final class HealthChecks
 
             $results = [];
             foreach ($latest->storedCheckResults as $result) {
-                $results[] = ['name' => self::name((string) ($result->label ?: $result->name)), 'status' => (string) $result->status];
+                $status = strtolower((string) $result->status);
+                // A status from a fixed list, or the result isn't sent: SkyLock is never handed a word it doesn't know.
+                if (in_array($status, self::LARAVEL_HEALTH_STATUSES, true)) {
+                    $results[] = ['name' => self::name((string) ($result->label ?: $result->name)), 'status' => $status];
+                }
             }
 
             return $results;
