@@ -40,6 +40,11 @@ final class QueuedOutcomes
      */
     public function add(string $key, string $event, ?int $durationMs = null): void
     {
+        // SkyLock revoked the token: nothing would ever send them.
+        if (Revocation::active()) {
+            return;
+        }
+
         if (! $this->keep([['key' => $key, 'event' => $event, 'durationMs' => $durationMs]])) {
             $this->events->sendForQueuedWork($key, $event, $durationMs);
         }

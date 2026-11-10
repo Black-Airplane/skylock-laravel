@@ -5,6 +5,7 @@ namespace BlackAirplane\SkyLockReporter\Commands;
 use BlackAirplane\SkyLockReporter\HealthChecks;
 use BlackAirplane\SkyLockReporter\LocalState;
 use BlackAirplane\SkyLockReporter\QueuedOutcomes;
+use BlackAirplane\SkyLockReporter\Revocation;
 use BlackAirplane\SkyLockReporter\ScheduledTasks;
 use BlackAirplane\SkyLockReporter\SkyLockClient;
 use BlackAirplane\SkyLockReporter\Stack;
@@ -28,6 +29,11 @@ class ReportCommand extends Command
         if (! $client->configured()) {
             $this->components->warn('SKYLOCK_REPORTER_TOKEN isn\'t set, so nothing was sent.');
 
+            return self::SUCCESS;
+        }
+
+        // SkyLock revoked the token: nothing is checked or read until the daily check.
+        if (Revocation::waiting()) {
             return self::SUCCESS;
         }
 

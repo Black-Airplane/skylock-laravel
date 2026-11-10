@@ -68,9 +68,13 @@ The payload gains a `skylock` entry (the task key, a random run id, and how far 
 
 It never sends error messages, exception text, hostnames, addresses, connection names, queries, environment variables (names or values), command arguments or anything a user entered. A report that can't get through is dropped after three seconds, and the reporter never throws. Task events are sent from inside the scheduler, so after one doesn't get through, tasks that run again within two minutes skip SkyLock for a minute (their next run reports them): an unreachable SkyLock costs your scheduler about one timeout a minute, however many tasks it runs. Failures, and tasks that run less often, are always sent.
 
+## When SkyLock stops accepting the token
+
+When an application is retired in SkyLock, or its client is offboarded, SkyLock answers its reporter `410 Gone` with `"revoked": true`. From 0.4.3 the reporter then stops: no minute report (its health checks don't run), no task events, nothing kept for queued work. It logs a warning once and checks once a day whether it's been restored. A new token, or `php artisan skylock:test`, resumes it at once. Only that answer stops it: a `410` without `revoked`, a `401` or SkyLock being down never does. To leave SkyLock for good, `composer remove blackairplane/skylock-laravel`.
+
 ## Commands
 
-- `php artisan skylock:test` shows exactly what would be sent, and sends one report.
+- `php artisan skylock:test` shows exactly what would be sent, and sends one report, even when SkyLock has revoked the token (so it's also how to resume straight away once it's restored).
 - `php artisan skylock:sync-schedule` sends the schedule now, e.g. from a deploy script. It also happens automatically.
 - `php artisan skylock:report` is the minute report; the scheduler runs it for you.
 
@@ -91,7 +95,7 @@ php artisan vendor:publish --tag=skylock-reporter
 | `timeout` | 3 | Seconds to wait for SkyLock before giving up |
 | `nightwatch_sample_rate` | 0.01 | The share of minute reports Laravel Nightwatch records (`SKYLOCK_REPORTER_NIGHTWATCH_SAMPLE_RATE`) |
 
-Between minutes the reporter keeps two things on the server, in `storage/framework/cache/skylock-reporter.json`: the schedule's hash and what the app runs on (the same facts it sends). It uses the app's cache only to check the cache works, and to note the web PHP.
+Between minutes the reporter keeps a few things on the server, in `storage/framework/cache/skylock-reporter.json`: the schedule's hash and what the app runs on (the same facts it sends), and, once SkyLock has revoked the token, a fingerprint of that token and when to check again. It uses the app's cache only to check the cache works, and to note the web PHP.
 
 ## With Laravel Nightwatch
 

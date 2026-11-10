@@ -6,7 +6,8 @@
 - SkyLock counts only `condition` as on time. A held lock or a paused schedule still makes the task late, as before, and the outage now says which.
 - A skip the reporter can't explain (the cache can't be read) isn't sent, so the task goes late as it always did. A task that repeats within the minute has its skips sent once a minute, and again when the reason changes. The reporter's own report is never reported.
 - Tasks limited to other environments (`->environments('production')`) are left out of the schedule a reporter sends: they never run in its environment, so SkyLock expected them there forever.
-- SkyLock takes skips from November 8, 2026.
+- The reporter stops when SkyLock revokes its token. When an application is retired in SkyLock, or its client offboarded, SkyLock answers `410 Gone` with `"revoked": true`; the reporter then sends nothing (its health checks don't run, task events and queued work aren't sent or kept), logs a warning once, and checks once a day whether it's been restored. A new token, or `skylock:test`, resumes it at once. A `410` without `revoked`, a `401` or an outage changes nothing. Before, it tried again every minute, forever.
+- SkyLock takes skips from November 8, 2026, and answers revoked tokens `410` from November 10, 2026.
 
 ## 0.4.2
 
