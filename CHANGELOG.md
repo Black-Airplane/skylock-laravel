@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.0
+
+What serves the app, and where its data lives, so SkyLock can tell when the web server, the database or Redis is missing security fixes. Forge's "Nginx to Root" advisory (November 18, 2026) found servers on nginx 1.28.1 while SkyLock, which never heard about nginx, called them healthy.
+
+- **The web server.** The reporter notes the web server that hands PHP its requests, alongside the web PHP it already noted: `nginx`, `apache`, `caddy`, `litespeed` or `openresty`, its version, and `ubuntu` or `debian` when the distribution built it. It comes from what the web server tells PHP about itself (`SERVER_SOFTWARE`), which nginx fills in with its real version even when `server_tokens off` hides it from visitors, and behind Cloudflare. Nothing else from that value is kept, and nothing else is read from the request: a test holds that `request()->server()` is read in one place, and a request's headers, body, cookies and address nowhere.
+- **Each server keeps its own note.** Servers behind one load balancer that share a cache used to overwrite each other's note of the web PHP, so SkyLock could hear a different version every hour. Notes are now kept per server (by the server key the reporter already sends) and last a week instead of a day, so a quiet app keeps its note between samples.
+- **Where the database and Redis live.** A name from a fixed list, worked out on the server from their host: `local`, `private-network`, a provider (`aws-rds`, `neon`, `upstash`, `laravel-cloud`…) or `other`. The host never leaves the app. A managed database's version looks like any other while its provider patches it, so this is what tells SkyLock whose it is to update.
+- **Who built the database.** PostgreSQL's version says who packaged it ("17.6 (Ubuntu 17.6-1.pgdg24.04+1)"); the reporter sends `pgdg`, `ubuntu` or `debian`, or nothing. A distribution's build carries fixes its version number doesn't show.
+- SkyLock reads all of this from November 2026; an older SkyLock ignores it.
+
 ## 0.4.4
 
 Security hardening. Upgrade to it.
