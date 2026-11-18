@@ -117,7 +117,7 @@ it('keeps the web PHP note off the request in Nightwatch', function () {
     WebRuntime::sample(always: true);
 
     expect($nightwatch->methods())->toBe(['ignore'])
-        ->and(WebRuntime::read())->toBe(['version' => PHP_VERSION, 'sapi' => PHP_SAPI]);
+        ->and(WebRuntime::read())->toBe(['version' => PHP_VERSION, 'sapi' => PHP_SAPI, 'server' => null]);
 });
 
 it('does nothing about Nightwatch in an app that doesn’t use it', function () {

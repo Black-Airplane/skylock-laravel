@@ -138,7 +138,7 @@ it('notes the web PHP once, in a cache the scheduler can read, and never in a pe
 
     config(['cache.default' => 'file']);
     WebRuntime::sample(always: true);
-    expect(WebRuntime::read())->toBe(['version' => PHP_VERSION, 'sapi' => PHP_SAPI]);
+    expect(WebRuntime::read())->toBe(['version' => PHP_VERSION, 'sapi' => PHP_SAPI, 'server' => null]);
 
     Cache::forget(WebRuntime::CACHE_KEY);
     WebRuntime::sample(always: true);
@@ -215,3 +215,66 @@ it('reads what the app runs on again, and sends it, when SkyLock asks', function
         ->and($stacks->first()[0]['collectedAt'])->toBe('2026-11-02T12:05:00+00:00')
         ->and($stacks->first()[0]['schema'])->toBe(1);
 });
+
+it('notes which web server handed PHP the request, from a fixed list, with nothing else from that value', function (?string $software, ?array $server) {
+    config(['cache.default' => 'file']);
+    request()->server->set('SERVER_SOFTWARE', $software);
+
+    WebRuntime::sample(always: true);
+
+    expect(WebRuntime::read()['server'])->toBe($server);
+})->with([
+    // nginx passes its own version to PHP-FPM even with server_tokens off.
+    'nginx' => ['nginx/1.28.1', ['product' => 'nginx', 'version' => '1.28.1', 'build' => null]],
+    'Apache, built by Ubuntu' => ['Apache/2.4.58 (Ubuntu)', ['product' => 'apache', 'version' => '2.4.58', 'build' => 'ubuntu']],
+    'Caddy' => ['Caddy/v2.10.0', ['product' => 'caddy', 'version' => '2.10.0', 'build' => null]],
+    'LiteSpeed, no version' => ['LiteSpeed', ['product' => 'litespeed', 'version' => null, 'build' => null]],
+    'something not on the list' => ['sentinel-proxy/9.9', null],
+    'nothing' => [null, null],
+]);
+
+it('keeps each server’s note apart, so servers sharing a cache don’t take turns being reported', function () {
+    config(['cache.default' => 'file']);
+    serverFile('/etc/machine-id', str_repeat('a', 32)."\n");
+    request()->server->set('SERVER_SOFTWARE', 'nginx/1.30.7');
+    WebRuntime::sample(always: true);
+
+    // Another server behind the same load balancer, on the old nginx.
+    serverFile('/etc/machine-id', str_repeat('b', 32)."\n");
+    WebRuntime::forget();
+    request()->server->set('SERVER_SOFTWARE', 'nginx/1.28.1');
+    WebRuntime::sample(always: true);
+    expect(WebRuntime::read()['server']['version'])->toBe('1.28.1');
+
+    serverFile('/etc/machine-id', str_repeat('a', 32)."\n");
+    expect(WebRuntime::read()['server']['version'])->toBe('1.30.7');
+});
+
+it('says where a database or cache lives from a fixed list, never its host', function (mixed $host, string $provider) {
+    expect(Stack::provider($host))->toBe($provider);
+})->with([
+    'this machine' => ['127.0.0.1', 'local'],
+    'a socket' => ['/var/run/postgresql', 'local'],
+    'no host at all' => [null, 'local'],
+    'another server on the private network' => ['10.106.0.4', 'private-network'],
+    'a Docker service' => ['mysql', 'private-network'],
+    'Amazon RDS' => ['sentinel-prod.c9akciq32.us-east-1.rds.amazonaws.com', 'aws-rds'],
+    'Neon' => ['ep-sentinel-123456.us-east-2.aws.neon.tech', 'neon'],
+    'Upstash, as a URL' => ['tls://sentinel-cache.upstash.io', 'upstash'],
+    'Laravel Cloud' => ['sentinel.pg.laravel.cloud', 'laravel-cloud'],
+    'read and write hosts' => [['10.0.0.9', '10.0.0.10'], 'private-network'],
+    'a public address' => ['203.0.113.7', 'other'],
+    'anywhere else' => ['db.sentinel-client.com', 'other'],
+]);
+
+it('says who built the database from its own version, and only that', function (string $version, ?string $build) {
+    $read = Closure::bind(fn (string $raw): ?string => Stack::build($raw), null, Stack::class);
+
+    expect($read($version))->toBe($build);
+})->with([
+    'PGDG' => ['17.6 (Ubuntu 17.6-1.pgdg24.04+1)', 'pgdg'],
+    'Ubuntu' => ['16.10 (Ubuntu 16.10-0ubuntu0.24.04.1)', 'ubuntu'],
+    'Debian' => ['15.14 (Debian 15.14-0+deb12u1)', 'debian'],
+    'MySQL from Ubuntu' => ['8.0.43-0ubuntu0.24.04.1', 'ubuntu'],
+    'upstream' => ['17.6', null],
+]);

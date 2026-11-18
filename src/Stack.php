@@ -9,13 +9,16 @@ use Throwable;
 /**
  * What this app runs on: the operating system and whether it's waiting on
  * security updates or a restart, the PHP running the scheduler and serving
- * web requests, Laravel, the database and Redis versions, the deployed
- * commit, the hosting, and whether an error monitor is configured.
+ * web requests and the web server in front of it, Laravel, the database and
+ * Redis versions and where each lives, the deployed commit, the hosting, and
+ * whether an error monitor is configured.
  *
  * It only reads plain files and asks PHP and the app's own connections; it
  * never runs a command. It sends names from fixed lists, versions, counts
  * and booleans: never a hostname, an address, a connection name or an
- * environment value. Anything it can't read is sent as null.
+ * environment value. Where a database lives is worked out here, from its
+ * host, into a name from a fixed list; the host never leaves the app.
+ * Anything it can't read is sent as null.
  */
 final class Stack
 {
@@ -33,6 +36,29 @@ final class Stack
         'honeybadger.api_key',
         'logging.channels.rollbar.access_token',
         'nightwatch.token',
+    ];
+
+    /**
+     * Where a database or cache lives, by the end of its host's name: the
+     * provider runs and patches it. A host that matches none of these is
+     * `other`; one on this machine is `local`; one on a private network
+     * (an address like 10.0.0.5, or a one-word name like `mysql` from
+     * Docker) is `private-network`, most likely another server we manage.
+     */
+    private const PROVIDERS = [
+        '.rds.amazonaws.com' => 'aws-rds',
+        '.cache.amazonaws.com' => 'aws-elasticache',
+        '.neon.tech' => 'neon',
+        '.upstash.io' => 'upstash',
+        '.db.ondigitalocean.com' => 'digitalocean',
+        '.laravel.cloud' => 'laravel-cloud',
+        '.supabase.co' => 'supabase',
+        '.supabase.com' => 'supabase',
+        '.psdb.cloud' => 'planetscale',
+        '.redis-cloud.com' => 'redis-cloud',
+        '.redislabs.com' => 'redis-cloud',
+        '.database.azure.com' => 'azure',
+        '.redis.cache.windows.net' => 'azure',
     ];
 
     /**
@@ -67,12 +93,13 @@ final class Stack
                 'web' => $web['version'] ?? null,
                 'webSapi' => $web['sapi'] ?? null,
             ],
+            'webServer' => $web['server'] ?? null,
             'laravel' => app()->version(),
             'database' => self::attempt(self::database(...)),
             'cache' => self::attempt(self::redis(...)),
             'deployedCommit' => self::attempt(self::commit(...)),
             'hosting' => self::attempt(self::hosting(...)),
-            'serverKey' => is_array($os) && $os['container'] === false ? self::attempt(self::serverKey(...)) : null,
+            'serverKey' => is_array($os) && $os['container'] === false ? self::serverKey() : null,
             'errorMonitoring' => self::attempt(self::errorMonitoring(...)),
         ];
     }
@@ -206,9 +233,12 @@ final class Stack
     }
 
     /**
-     * The default connection's server, as a product from a fixed list and its version.
+     * The default connection's server, as a product from a fixed list and its
+     * version; who built it, when the version says (`pgdg`, `ubuntu`,
+     * `debian`: PostgreSQL says "17.6 (Ubuntu 17.6-1.pgdg24.04+1)"); and where
+     * it lives, from its host, as a provider from a fixed list.
      *
-     * @return array{product: string, version: string}|null
+     * @return array{product: string, version: string, build: string|null, provider: string}|null
      */
     private static function database(): ?array
     {
@@ -223,14 +253,75 @@ final class Stack
         };
         // MariaDB can say "5.5.5-10.11.8-MariaDB": the real version is the one before "-MariaDB".
         $pattern = $product === 'mariadb' ? '/(\d+\.\d+(?:\.\d+)?)-MariaDB/i' : '/^(\d+(?:\.\d+){0,2})/';
+        if ($product === null || preg_match($pattern, $raw, $match) !== 1) {
+            return null;
+        }
 
-        return $product !== null && preg_match($pattern, $raw, $match) === 1 ? ['product' => $product, 'version' => $match[1]] : null;
+        $config = (array) config('database.connections.'.$connection->getName());
+
+        return [
+            'product' => $product,
+            'version' => $match[1],
+            'build' => self::build($raw),
+            'provider' => $product === 'sqlite' ? 'local' : self::provider($config['host'] ?? null, $config['url'] ?? null, $config['unix_socket'] ?? null),
+        ];
     }
 
     /**
-     * Redis or Valkey, only when the app's cache, queue or sessions use it.
+     * Who built a server, from what its version says about itself: PGDG's
+     * packages, or a distribution's. Only these words, or nothing.
+     */
+    private static function build(string $version): ?string
+    {
+        return match (true) {
+            preg_match('/pgdg/i', $version) === 1 => 'pgdg',
+            preg_match('/ubuntu/i', $version) === 1 => 'ubuntu',
+            preg_match('/debian|\+deb\d/i', $version) === 1 => 'debian',
+            default => null,
+        };
+    }
+
+    /**
+     * Where a database or cache lives, from its host, as a name from a fixed
+     * list. The host is read here and goes no further.
+     */
+    public static function provider(mixed $host, mixed $url = null, mixed $socket = null): string
+    {
+        if (is_array($host)) {
+            $host = $host[0] ?? null;
+        }
+        if ((! is_string($host) || $host === '') && is_string($url) && $url !== '') {
+            $host = parse_url($url, PHP_URL_HOST);
+        }
+        if (is_string($host) && str_contains($host, '://')) {
+            $host = parse_url($host, PHP_URL_HOST);
+        }
+        $host = is_string($host) ? strtolower(trim($host, " []\t\n")) : '';
+
+        if ($host === '' || in_array($host, ['localhost', '127.0.0.1', '::1'], true) || str_starts_with($host, '/') || (is_string($socket) && $socket !== '')) {
+            return 'local';
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP) !== false) {
+            return filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false ? 'private-network' : 'other';
+        }
+        if (! str_contains($host, '.')) {
+            return 'private-network';
+        }
+
+        foreach (self::PROVIDERS as $suffix => $provider) {
+            if (str_ends_with($host, $suffix)) {
+                return $provider;
+            }
+        }
+
+        return 'other';
+    }
+
+    /**
+     * Redis or Valkey, only when the app's cache, queue or sessions use it,
+     * and where it lives, as a provider from a fixed list.
      *
-     * @return array{product: string, version: string}|null
+     * @return array{product: string, version: string, provider: string}|null
      */
     private static function redis(): ?array
     {
@@ -248,8 +339,10 @@ final class Stack
         $valkey = is_string($server['valkey_version'] ?? null) ? $server['valkey_version'] : null;
         $version = $valkey ?? (is_string($server['redis_version'] ?? null) ? $server['redis_version'] : null);
 
+        $config = (array) config('database.redis.default');
+
         return $version !== null && preg_match('/^\d+(?:\.\d+){0,2}$/', $version) === 1
-            ? ['product' => $valkey !== null ? 'valkey' : 'redis', 'version' => $version]
+            ? ['product' => $valkey !== null ? 'valkey' : 'redis', 'version' => $version, 'provider' => self::provider($config['host'] ?? null, $config['url'] ?? null, $config['path'] ?? null)]
             : null;
     }
 
@@ -329,8 +422,14 @@ final class Stack
     /**
      * The same for every app on this server and different on every other,
      * without the machine id itself leaving it (systemd's app-specific id).
+     * Null when it can't be read.
      */
-    private static function serverKey(): ?string
+    public static function serverKey(): ?string
+    {
+        return self::attempt(self::machineKey(...));
+    }
+
+    private static function machineKey(): ?string
     {
         $machine = trim((string) self::read('/etc/machine-id'));
 
