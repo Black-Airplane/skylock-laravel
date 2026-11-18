@@ -2,6 +2,7 @@
 
 use BlackAirplane\SkyLockReporter\LocalState;
 use BlackAirplane\SkyLockReporter\ScheduledTasks;
+use BlackAirplane\SkyLockReporter\Stack;
 use Illuminate\Console\Events\ScheduledTaskFinished;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Client\Request;
@@ -84,8 +85,15 @@ it('says whether debug mode is on and whether the app is in production, never th
         && ! str_contains($request->body(), 'sentinel-app-key'));
 });
 
+// A test that points the reporter at a made-up server leaves the real one for the next.
+afterEach(fn () => Stack::$root = '');
+
 it('remembers the schedule and what the app runs on in a file, not in the app’s cache', function () {
     reporterConfigured();
+    // The same on every machine: the web PHP note is this server's, by its key.
+    Stack::$root = sys_get_temp_dir().'/skylock-reporter-'.bin2hex(random_bytes(4));
+    @mkdir(Stack::$root.'/etc', recursive: true);
+    file_put_contents(Stack::$root.'/etc/machine-id', str_repeat('c', 32)."\n");
     app(Schedule::class)->command('backup:run')->daily();
     Http::fake([
         'skylock.example/api/ingest/health' => Http::response(['accepted' => true, 'scheduleKnown' => true, 'stackKnown' => true], 202),
@@ -106,12 +114,15 @@ it('remembers the schedule and what the app runs on in a file, not in the app’
         ->and(LocalState::get('schedule'))->toMatch('/^[0-9a-f]{40}$/')
         ->and(LocalState::get('stack'))->toHaveKeys(['deploy', 'until', 'collectedAt', 'stack'])
         // Only the cache check and one look for what queue workers noted use the cache now
-        // (and the web PHP note, read with the stack).
-        ->and(collect($first)->map(fn (string $event) => Str::after($event, ':'))->unique()->sort()->values()->all())->toBe(['skylock-reporter:probe', 'skylock-reporter:queued-outcomes', 'skylock-reporter:web-runtime'])
+        // (and the web PHP note, read with the stack: this server's, then the one 0.4 kept for every server).
+        ->and(collect($first)->map(fn (string $event) => preg_replace('/:[0-9a-f]{16}$/', ':{server}', Str::after($event, ':')))->unique()->sort()->values()->all())
+        ->toBe(['skylock-reporter:probe', 'skylock-reporter:queued-outcomes', 'skylock-reporter:web-runtime', 'skylock-reporter:web-runtime:{server}'])
         ->and($cache)->toBe([
             'WritingKey:skylock-reporter:probe', 'KeyWritten:skylock-reporter:probe', 'RetrievingKey:skylock-reporter:probe', 'CacheHit:skylock-reporter:probe',
             'RetrievingKey:skylock-reporter:queued-outcomes', 'CacheMissed:skylock-reporter:queued-outcomes',
         ]);
+
+    exec('rm -rf '.escapeshellarg(Stack::$root));
 });
 
 it('reads what the app runs on again after an hour', function () {

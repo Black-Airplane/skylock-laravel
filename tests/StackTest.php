@@ -28,11 +28,12 @@ it('sends what it runs on as names from fixed lists, versions, counts and boolea
 
     $stack = Stack::collect();
 
-    expect(array_keys($stack))->toBe(['schema', 'os', 'patching', 'php', 'laravel', 'database', 'cache', 'deployedCommit', 'hosting', 'serverKey', 'errorMonitoring'])
+    expect(array_keys($stack))->toBe(['schema', 'os', 'patching', 'php', 'webServer', 'laravel', 'database', 'cache', 'deployedCommit', 'hosting', 'serverKey', 'errorMonitoring'])
         ->and($stack['os'])->toBe(['type' => 'linux', 'id' => 'ubuntu', 'version' => '22.04', 'container' => false])
         ->and($stack['patching'])->toBe(['securityUpdates' => 4, 'restartPending' => true, 'restartPendingSince' => '2026-10-30T02:05:00Z', 'restartForKernel' => true, 'kernel' => ['version' => '5.15.0-125.135', 'flavour' => 'generic'], 'autoUpdates' => true, 'extendedSupport' => false])
         ->and($stack['php']['cli'])->toBe(PHP_VERSION)
-        ->and($stack['database']['product'])->toBe('sqlite')
+        ->and($stack['webServer'])->toBeNull()
+        ->and($stack['database'])->toMatchArray(['product' => 'sqlite', 'build' => null, 'provider' => 'local'])
         ->and($stack['deployedCommit'])->toBe(str_repeat('ab', 20))
         ->and($stack['serverKey'])->toBe(hash_hmac('sha256', 'skylock-reporter', '0123456789abcdef0123456789abcdef'))
         ->and($stack['errorMonitoring'])->toBeTrue()
