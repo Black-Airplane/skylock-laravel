@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1
+
+Which nginx is installed no longer waits for a visitor.
+
+- **The installed nginx, from the scheduler.** 0.5.0 learned which nginx a server runs from web requests alone, one in 500, so a site with a few visitors a week could take days to say, and the first report after a deploy never could. The scheduler now reads it from the package manager's own list (`/var/lib/dpkg/status`, on Debian and Ubuntu): nginx's version and who packaged it (`nginx-org`, `ondrej`, `ubuntu`, `debian` or `other`). No visitor needed, and nothing added to any web request. Only nginx's entry is looked at, and only when it's fully installed; no other package's name or version leaves the server, and a test with a client's own package in the list holds that.
+- **Read again when the server's packages change.** What the app runs on was read at most hourly and after a deploy. It's now also read straight after the package list changes, so an upgrade (and the security updates it clears) reaches SkyLock within a minute instead of within the hour.
+- **Who packaged it decides how it's judged.** Ubuntu's and Debian's own nginx carry fixes their version number doesn't show; nginx.org's and Ondřej Surý's are the upstream release. SkyLock guessed this from the version; now it's told.
+- **The web note says which nginx is serving, and only when it can.** It's what tells an upgraded nginx from one still waiting on its restart. About one web request in 50 writes it now (it was 500), still after the response, still one cache write and nothing read. A note written before the server's packages last changed isn't sent: it can't say what's serving since.
+- SkyLock reads `installed` from November 19, 2026; an older SkyLock ignores it.
+
 ## 0.5.0
 
 What serves the app, and where its data lives, so SkyLock can tell when the web server, the database or Redis is missing security fixes. Forge's "Nginx to Root" advisory (November 18, 2026) found servers on nginx 1.28.1 while SkyLock, which never heard about nginx, called them healthy.

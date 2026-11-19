@@ -28,11 +28,12 @@ it('sends what it runs on as names from fixed lists, versions, counts and boolea
 
     $stack = Stack::collect();
 
-    expect(array_keys($stack))->toBe(['schema', 'os', 'patching', 'php', 'webServer', 'laravel', 'database', 'cache', 'deployedCommit', 'hosting', 'serverKey', 'errorMonitoring'])
+    expect(array_keys($stack))->toBe(['schema', 'os', 'patching', 'php', 'webServer', 'installed', 'laravel', 'database', 'cache', 'deployedCommit', 'hosting', 'serverKey', 'errorMonitoring'])
         ->and($stack['os'])->toBe(['type' => 'linux', 'id' => 'ubuntu', 'version' => '22.04', 'container' => false])
         ->and($stack['patching'])->toBe(['securityUpdates' => 4, 'restartPending' => true, 'restartPendingSince' => '2026-10-30T02:05:00Z', 'restartForKernel' => true, 'kernel' => ['version' => '5.15.0-125.135', 'flavour' => 'generic'], 'autoUpdates' => true, 'extendedSupport' => false])
         ->and($stack['php']['cli'])->toBe(PHP_VERSION)
         ->and($stack['webServer'])->toBeNull()
+        ->and($stack['installed'])->toBe(['nginx' => ['version' => '1.28.1', 'packager' => 'nginx-org']])
         ->and($stack['database'])->toMatchArray(['product' => 'sqlite', 'build' => null, 'provider' => 'local'])
         ->and($stack['deployedCommit'])->toBe(str_repeat('ab', 20))
         ->and($stack['serverKey'])->toBe(hash_hmac('sha256', 'skylock-reporter', '0123456789abcdef0123456789abcdef'))
@@ -40,7 +41,10 @@ it('sends what it runs on as names from fixed lists, versions, counts and boolea
         ->and(json_encode($stack))->not->toContain('sentinel-dsn')
         ->and(json_encode($stack))->not->toContain('0123456789abcdef0123456789abcdef')
         ->and(json_encode($stack))->not->toContain('Ubuntu 22.04.5 LTS')
-        ->and(json_encode($stack))->not->toContain('linux-image');
+        ->and(json_encode($stack))->not->toContain('linux-image')
+        // Nothing of any other package, the client's own least of all.
+        ->and(json_encode($stack))->not->toContain('sentinel')
+        ->and(json_encode($stack))->not->toContain('adduser');
 });
 
 it('says since when a restart has been pending, and whether a new kernel waits on it, without naming a package', function () {
@@ -139,7 +143,7 @@ it('notes the web PHP once, in a cache the scheduler can read, and never in a pe
 
     config(['cache.default' => 'file']);
     WebRuntime::sample(always: true);
-    expect(WebRuntime::read())->toBe(['version' => PHP_VERSION, 'sapi' => PHP_SAPI, 'server' => null]);
+    expect(WebRuntime::read())->toMatchArray(['version' => PHP_VERSION, 'sapi' => PHP_SAPI, 'server' => null]);
 
     Cache::forget(WebRuntime::CACHE_KEY);
     WebRuntime::sample(always: true);
@@ -279,3 +283,80 @@ it('says who built the database from its own version, and only that', function (
     'MySQL from Ubuntu' => ['8.0.43-0ubuntu0.24.04.1', 'ubuntu'],
     'upstream' => ['17.6', null],
 ]);
+
+/**
+ * @return array{nginx: array{version: string, packager: string}}|null
+ */
+function installedOn(string $packages): ?array
+{
+    serverFile('/var/lib/dpkg/status', $packages);
+
+    return Closure::bind(fn (): ?array => Stack::installed(), null, Stack::class)();
+}
+
+it('says which nginx is installed and who packaged it, from the package manager’s own list', function (string $version, string $maintainer, array $installed) {
+    expect(installedOn(packageList(packageEntry('nginx', $version, $maintainer))))->toBe(['nginx' => $installed]);
+})->with([
+    // The real entries, from Ubuntu 24.04's and nginx.org's packages.
+    'nginx.org' => ['1.31.9-1~noble', 'NGINX Packaging <nginx-packaging@f5.com>', ['version' => '1.31.9', 'packager' => 'nginx-org']],
+    'Ubuntu' => ['1.24.0-2ubuntu7.19', 'Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>', ['version' => '1.24.0', 'packager' => 'ubuntu']],
+    // Its version names the Ubuntu release it's for; it's still Ondřej's.
+    'Ondřej’s PPA' => ['1.28.1-1+ubuntu24.04.1+deb.sury.org+1', 'Debian Nginx Maintainers <pkg-nginx-maintainers@alioth-lists.debian.net>', ['version' => '1.28.1', 'packager' => 'ondrej']],
+    'Debian' => ['1.22.1-9+deb12u3', 'Debian Nginx Maintainers <pkg-nginx-maintainers@alioth-lists.debian.net>', ['version' => '1.22.1', 'packager' => 'debian']],
+    'someone else’s build' => ['1:1.29.4-sentinel7', 'Sentinel Ops <ops@sentinel-client.example>', ['version' => '1.29.4', 'packager' => 'other']],
+]);
+
+it('counts only an nginx that’s fully installed, and nothing else in the list', function () {
+    // After switching to nginx.org, Ubuntu's nginx-common stays listed: removed, its configuration kept.
+    expect(installedOn(packageList(
+        packageEntry('nginx-common', '1.24.0-2ubuntu7.19', 'Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>', 'deinstall ok config-files'),
+        packageEntry('nginx', '1.24.0-2ubuntu7.19', 'Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>', 'deinstall ok config-files'),
+        packageEntry('nginx-core', '1.30.7-1~noble', 'NGINX Packaging <nginx-packaging@f5.com>'),
+    )))->toBe(['nginx' => ['version' => '1.30.7', 'packager' => 'nginx-org']])
+        // A package that only starts with its name isn't it.
+        ->and(installedOn(packageList(packageEntry('nginx-sentinel-module', '9.9.9-1', 'Sentinel Ops <ops@sentinel-client.example>'))))->toBeNull()
+        ->and(installedOn(packageList()))->toBeNull();
+
+    // No list at all (not Debian or Ubuntu, or it can't be read): nothing to say.
+    unlink($this->root.'/var/lib/dpkg/status');
+    expect(Closure::bind(fn (): ?array => Stack::installed(), null, Stack::class)())->toBeNull();
+});
+
+it('finds nginx in a list of a few megabytes, past where every other read stops', function () {
+    $padding = '';
+    for ($i = 0; $i < 9000; $i++) {
+        $padding .= packageEntry("libsentinel{$i}", '1.0-1', 'Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>')."\n";
+    }
+
+    expect(strlen($padding))->toBeGreaterThan(2 * 1024 * 1024)
+        ->and(installedOn($padding.packageEntry('nginx', '1.28.1-1~noble', 'NGINX Packaging <nginx-packaging@f5.com>')))->toBe(['nginx' => ['version' => '1.28.1', 'packager' => 'nginx-org']]);
+});
+
+it('reads what the app runs on again when the server’s packages change', function () {
+    serverFile('/var/lib/dpkg/status', packageList());
+    touch($this->root.'/var/lib/dpkg/status', strtotime('2026-11-18 06:25:00 UTC'));
+    $before = Stack::deployFingerprint();
+
+    // An upgrade, unattended or by hand, writes the list again.
+    touch($this->root.'/var/lib/dpkg/status', strtotime('2026-11-19 06:25:00 UTC'));
+
+    expect(Stack::deployFingerprint())->not->toBe($before);
+});
+
+it('forgets which web server was serving once the server’s packages have changed since', function () {
+    if (PHP_OS_FAMILY !== 'Linux') {
+        $this->markTestSkipped('Reading /etc is Linux only.');
+    }
+    ubuntuServer();
+    config(['cache.default' => 'file']);
+    request()->server->set('SERVER_SOFTWARE', 'nginx/1.28.1');
+    touch($this->root.'/var/lib/dpkg/status', time() - 3600);
+    WebRuntime::sample(always: true);
+    expect(Stack::collect()['webServer'])->toBe(['product' => 'nginx', 'version' => '1.28.1', 'build' => null]);
+
+    // nginx was upgraded after that request: it may have been restarted since, or not. Nothing says.
+    touch($this->root.'/var/lib/dpkg/status', time() + 60);
+    expect(Stack::collect())
+        ->webServer->toBeNull()
+        ->php->web->toBe(PHP_VERSION);
+});
