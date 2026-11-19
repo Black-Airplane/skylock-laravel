@@ -510,6 +510,8 @@ final class Stack
     private static function packagesChangedAt(): ?int
     {
         $path = self::$root.self::PACKAGES;
+        // PHP remembers what it last saw of a file for the life of the process: ask the disk.
+        clearstatcache(true, $path);
         $changed = @is_file($path) ? @filemtime($path) : false;
 
         return $changed === false ? null : $changed;
