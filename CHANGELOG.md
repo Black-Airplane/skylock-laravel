@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.2
+
+Whether nginx was restarted, from the scheduler; and nothing is read from a web request any more.
+
+- **Is the installed nginx the one running?** An upgraded nginx keeps running the old version until it's restarted (a reload doesn't load it), so "1.31.9 is installed" didn't tell SkyLock a server was safe, and it waited a day before closing a finding. The scheduler now says, from two file times: nginx writes its process id file (`/run/nginx.pid`) when it starts, and an upgrade puts a new program at `/usr/sbin/nginx`. Started since: it's the installed one. Started before: it still waits on its restart. One yes or no (`installed.nginx.running`), no file read, no command, no visitor. Measured on a real upgrade from Ubuntu's 1.24.0 to nginx.org's 1.31.9: right after the upgrade, after a reload, and after a restart.
+- **A restart is reported within a minute.** What the app runs on is read again when nginx's process id file changes, as it already is after a deploy or a change to the server's packages. That's one more file time looked at each minute.
+- **Nothing is read from a web request.** 0.5.0 read which web server handed PHP the request (`SERVER_SOFTWARE`), the only thing the package ever read from one. The scheduler now knows more, sooner, so that's gone, with the `webServer` it sent. The web note is back to what it was before 0.5.0: the PHP version and SAPI. A test holds that no request value is read anywhere in the package.
+- **A note of which PHP served a request isn't sent once the server's packages have changed since.** After an upgrade it described the PHP from before, and kept a fixed PHP looking unfixed until the next sampled request.
+- SkyLock reads `running` from November 19, 2026; an older SkyLock ignores it.
+
 ## 0.5.1
 
 Which nginx is installed no longer waits for a visitor.

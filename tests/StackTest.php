@@ -28,12 +28,11 @@ it('sends what it runs on as names from fixed lists, versions, counts and boolea
 
     $stack = Stack::collect();
 
-    expect(array_keys($stack))->toBe(['schema', 'os', 'patching', 'php', 'webServer', 'installed', 'laravel', 'database', 'cache', 'deployedCommit', 'hosting', 'serverKey', 'errorMonitoring'])
+    expect(array_keys($stack))->toBe(['schema', 'os', 'patching', 'php', 'installed', 'laravel', 'database', 'cache', 'deployedCommit', 'hosting', 'serverKey', 'errorMonitoring'])
         ->and($stack['os'])->toBe(['type' => 'linux', 'id' => 'ubuntu', 'version' => '22.04', 'container' => false])
         ->and($stack['patching'])->toBe(['securityUpdates' => 4, 'restartPending' => true, 'restartPendingSince' => '2026-10-30T02:05:00Z', 'restartForKernel' => true, 'kernel' => ['version' => '5.15.0-125.135', 'flavour' => 'generic'], 'autoUpdates' => true, 'extendedSupport' => false])
         ->and($stack['php']['cli'])->toBe(PHP_VERSION)
-        ->and($stack['webServer'])->toBeNull()
-        ->and($stack['installed'])->toBe(['nginx' => ['version' => '1.28.1', 'packager' => 'nginx-org']])
+        ->and($stack['installed'])->toBe(['nginx' => ['version' => '1.28.1', 'packager' => 'nginx-org', 'running' => true]])
         ->and($stack['database'])->toMatchArray(['product' => 'sqlite', 'build' => null, 'provider' => 'local'])
         ->and($stack['deployedCommit'])->toBe(str_repeat('ab', 20))
         ->and($stack['serverKey'])->toBe(hash_hmac('sha256', 'skylock-reporter', '0123456789abcdef0123456789abcdef'))
@@ -143,7 +142,7 @@ it('notes the web PHP once, in a cache the scheduler can read, and never in a pe
 
     config(['cache.default' => 'file']);
     WebRuntime::sample(always: true);
-    expect(WebRuntime::read())->toMatchArray(['version' => PHP_VERSION, 'sapi' => PHP_SAPI, 'server' => null]);
+    expect(WebRuntime::read())->toMatchArray(['version' => PHP_VERSION, 'sapi' => PHP_SAPI]);
 
     Cache::forget(WebRuntime::CACHE_KEY);
     WebRuntime::sample(always: true);
@@ -221,38 +220,21 @@ it('reads what the app runs on again, and sends it, when SkyLock asks', function
         ->and($stacks->first()[0]['schema'])->toBe(1);
 });
 
-it('notes which web server handed PHP the request, from a fixed list, with nothing else from that value', function (?string $software, ?array $server) {
-    config(['cache.default' => 'file']);
-    request()->server->set('SERVER_SOFTWARE', $software);
-
-    WebRuntime::sample(always: true);
-
-    expect(WebRuntime::read()['server'])->toBe($server);
-})->with([
-    // nginx passes its own version to PHP-FPM even with server_tokens off.
-    'nginx' => ['nginx/1.28.1', ['product' => 'nginx', 'version' => '1.28.1', 'build' => null]],
-    'Apache, built by Ubuntu' => ['Apache/2.4.58 (Ubuntu)', ['product' => 'apache', 'version' => '2.4.58', 'build' => 'ubuntu']],
-    'Caddy' => ['Caddy/v2.10.0', ['product' => 'caddy', 'version' => '2.10.0', 'build' => null]],
-    'LiteSpeed, no version' => ['LiteSpeed', ['product' => 'litespeed', 'version' => null, 'build' => null]],
-    'something not on the list' => ['sentinel-proxy/9.9', null],
-    'nothing' => [null, null],
-]);
-
 it('keeps each server’s note apart, so servers sharing a cache don’t take turns being reported', function () {
     config(['cache.default' => 'file']);
-    serverFile('/etc/machine-id', str_repeat('a', 32)."\n");
-    request()->server->set('SERVER_SOFTWARE', 'nginx/1.30.7');
+    // Nothing left from before servers kept their own; and two servers no earlier run has seen.
+    cache()->forget(WebRuntime::CACHE_KEY);
+    [$first, $second] = [bin2hex(random_bytes(16)), bin2hex(random_bytes(16))];
+    serverFile('/etc/machine-id', $first."\n");
     WebRuntime::sample(always: true);
+    expect(WebRuntime::read())->not->toBeNull();
 
-    // Another server behind the same load balancer, on the old nginx.
-    serverFile('/etc/machine-id', str_repeat('b', 32)."\n");
-    WebRuntime::forget();
-    request()->server->set('SERVER_SOFTWARE', 'nginx/1.28.1');
-    WebRuntime::sample(always: true);
-    expect(WebRuntime::read()['server']['version'])->toBe('1.28.1');
+    // Another server behind the same load balancer has noted nothing yet: it doesn't borrow the first's.
+    serverFile('/etc/machine-id', $second."\n");
+    expect(WebRuntime::read())->toBeNull();
 
-    serverFile('/etc/machine-id', str_repeat('a', 32)."\n");
-    expect(WebRuntime::read()['server']['version'])->toBe('1.30.7');
+    serverFile('/etc/machine-id', $first."\n");
+    expect(WebRuntime::read())->toMatchArray(['version' => PHP_VERSION, 'sapi' => PHP_SAPI]);
 });
 
 it('says where a database or cache lives from a fixed list, never its host', function (mixed $host, string $provider) {
@@ -285,7 +267,7 @@ it('says who built the database from its own version, and only that', function (
 ]);
 
 /**
- * @return array{nginx: array{version: string, packager: string}}|null
+ * @return array{nginx: array{version: string, packager: string, running: bool|null}}|null
  */
 function installedOn(string $packages): ?array
 {
@@ -295,7 +277,8 @@ function installedOn(string $packages): ?array
 }
 
 it('says which nginx is installed and who packaged it, from the package manager’s own list', function (string $version, string $maintainer, array $installed) {
-    expect(installedOn(packageList(packageEntry('nginx', $version, $maintainer))))->toBe(['nginx' => $installed]);
+    // No nginx process to see here: whether it's the one running is its own question.
+    expect(installedOn(packageList(packageEntry('nginx', $version, $maintainer))))->toBe(['nginx' => [...$installed, 'running' => null]]);
 })->with([
     // The real entries, from Ubuntu 24.04's and nginx.org's packages.
     'nginx.org' => ['1.31.9-1~noble', 'NGINX Packaging <nginx-packaging@f5.com>', ['version' => '1.31.9', 'packager' => 'nginx-org']],
@@ -312,7 +295,7 @@ it('counts only an nginx that’s fully installed, and nothing else in the list'
         packageEntry('nginx-common', '1.24.0-2ubuntu7.19', 'Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>', 'deinstall ok config-files'),
         packageEntry('nginx', '1.24.0-2ubuntu7.19', 'Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>', 'deinstall ok config-files'),
         packageEntry('nginx-core', '1.30.7-1~noble', 'NGINX Packaging <nginx-packaging@f5.com>'),
-    )))->toBe(['nginx' => ['version' => '1.30.7', 'packager' => 'nginx-org']])
+    )))->toBe(['nginx' => ['version' => '1.30.7', 'packager' => 'nginx-org', 'running' => null]])
         // A package that only starts with its name isn't it.
         ->and(installedOn(packageList(packageEntry('nginx-sentinel-module', '9.9.9-1', 'Sentinel Ops <ops@sentinel-client.example>'))))->toBeNull()
         ->and(installedOn(packageList()))->toBeNull();
@@ -329,7 +312,41 @@ it('finds nginx in a list of a few megabytes, past where every other read stops'
     }
 
     expect(strlen($padding))->toBeGreaterThan(2 * 1024 * 1024)
-        ->and(installedOn($padding.packageEntry('nginx', '1.28.1-1~noble', 'NGINX Packaging <nginx-packaging@f5.com>')))->toBe(['nginx' => ['version' => '1.28.1', 'packager' => 'nginx-org']]);
+        ->and(installedOn($padding.packageEntry('nginx', '1.28.1-1~noble', 'NGINX Packaging <nginx-packaging@f5.com>')))->toBe(['nginx' => ['version' => '1.28.1', 'packager' => 'nginx-org', 'running' => null]]);
+});
+
+/*
+ * Measured on Ubuntu 24.04, upgrading Ubuntu's nginx 1.24.0 to nginx.org's
+ * 1.31.9: after the upgrade `nginx -v` says 1.31.9 while 1.24.0 still
+ * answers; a reload changes nothing; a restart writes the process id file
+ * again. Its time against the program's says which is running.
+ */
+it('says whether the nginx running is the one installed, from two file times', function () {
+    $running = fn (): ?bool => installedOn(packageList(packageEntry('nginx', '1.31.9-1~noble', 'NGINX Packaging <nginx-packaging@f5.com>')))['nginx']['running'];
+
+    // Upgraded just now; nginx has been running since an hour ago: still the old one.
+    serverFile('/usr/sbin/nginx', 'the program');
+    serverFile('/run/nginx.pid', "2197\n");
+    touch($this->root.'/run/nginx.pid', time() - 3600);
+    expect($running())->toBeFalse();
+
+    // Restarted: nginx writes its process id file again.
+    touch($this->root.'/run/nginx.pid', time() + 5);
+    expect($running())->toBeTrue();
+
+    // Stopped, or it keeps its process id somewhere else: nothing to say.
+    unlink($this->root.'/run/nginx.pid');
+    expect($running())->toBeNull();
+});
+
+it('reads what the app runs on again when nginx restarts', function () {
+    serverFile('/run/nginx.pid', "2197\n");
+    touch($this->root.'/run/nginx.pid', strtotime('2026-11-18 06:25:00 UTC'));
+    $before = Stack::deployFingerprint();
+
+    touch($this->root.'/run/nginx.pid', strtotime('2026-11-19 01:43:00 UTC'));
+
+    expect(Stack::deployFingerprint())->not->toBe($before);
 });
 
 it('reads what the app runs on again when the server’s packages change', function () {
@@ -343,20 +360,17 @@ it('reads what the app runs on again when the server’s packages change', funct
     expect(Stack::deployFingerprint())->not->toBe($before);
 });
 
-it('forgets which web server was serving once the server’s packages have changed since', function () {
+it('leaves out a note of which PHP served a request once the server’s packages have changed since', function () {
     if (PHP_OS_FAMILY !== 'Linux') {
         $this->markTestSkipped('Reading /etc is Linux only.');
     }
     ubuntuServer();
     config(['cache.default' => 'file']);
-    request()->server->set('SERVER_SOFTWARE', 'nginx/1.28.1');
     touch($this->root.'/var/lib/dpkg/status', time() - 3600);
     WebRuntime::sample(always: true);
-    expect(Stack::collect()['webServer'])->toBe(['product' => 'nginx', 'version' => '1.28.1', 'build' => null]);
+    expect(Stack::collect()['php'])->toBe(['cli' => PHP_VERSION, 'web' => PHP_VERSION, 'webSapi' => PHP_SAPI]);
 
-    // nginx was upgraded after that request: it may have been restarted since, or not. Nothing says.
+    // PHP was upgraded after that request: the note is about the one before.
     touch($this->root.'/var/lib/dpkg/status', time() + 60);
-    expect(Stack::collect())
-        ->webServer->toBeNull()
-        ->php->web->toBe(PHP_VERSION);
+    expect(Stack::collect()['php'])->toBe(['cli' => PHP_VERSION, 'web' => null, 'webSapi' => null]);
 });

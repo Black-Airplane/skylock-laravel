@@ -76,6 +76,10 @@ function ubuntuServer(): void
     touch(test()->root.'/var/run/reboot-required', strtotime('2026-10-30 02:05:00 UTC'));
     serverFile('/etc/apt/apt.conf.d/20auto-upgrades', "APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n");
     serverFile('/var/lib/dpkg/status', packageList(packageEntry('nginx', '1.28.1-1~jammy', 'NGINX Packaging <nginx-packaging@f5.com>')));
+    // nginx, started since its program was installed.
+    serverFile('/usr/sbin/nginx', 'the program');
+    serverFile('/run/nginx.pid', "2197\n");
+    touch(test()->root.'/run/nginx.pid', time() + 5);
 }
 
 /**
