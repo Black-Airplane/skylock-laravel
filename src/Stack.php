@@ -9,8 +9,8 @@ use Throwable;
 /**
  * What this app runs on: the operating system and whether it's waiting on
  * security updates or a restart, the PHP running the scheduler and serving
- * web requests and the web server in front of it (which nginx is installed,
- * and which is serving), Laravel, the database and Redis versions and where
+ * web requests, which nginx is installed and whether it's the one running,
+ * Laravel, the database and Redis versions and where
  * each lives, the deployed commit, the hosting, and whether an error monitor
  * is configured.
  *
@@ -68,6 +68,11 @@ final class Stack
     /** That list is a few megabytes on a busy server; every other file read stops at 64 KB. */
     private const PACKAGES_BYTES = 16 * 1024 * 1024;
 
+    /** Where nginx writes its process id when it starts, and its program: every packager's nginx uses these. */
+    private const NGINX_PID = '/run/nginx.pid';
+
+    private const NGINX_PROGRAM = '/usr/sbin/nginx';
+
     /**
      * The only packages ever looked for in it, each under the product it
      * means. No other package's name or version leaves the server.
@@ -97,12 +102,12 @@ final class Stack
     public static function collect(): array
     {
         $os = self::attempt(self::os(...));
-        $web = WebRuntime::read();
         $server = is_array($os) && $os['container'] === false && in_array($os['id'], ['ubuntu', 'debian'], true);
-        // A note of which web server was serving, from before the server's packages last changed,
-        // says nothing about which one serves now: an upgrade and a restart may both have happened since.
+        // A note of which PHP served a request, from before the server's packages last changed, says
+        // nothing about which one serves now: it's left out until a request since then writes another.
         $changed = $server ? self::packagesChangedAt() : null;
-        $serving = $web !== null && ($changed === null || $web['at'] >= $changed) ? $web['server'] : null;
+        $web = WebRuntime::read();
+        $web = $web !== null && ($changed === null || $web['at'] >= $changed) ? $web : null;
 
         return [
             'schema' => 1,
@@ -113,7 +118,6 @@ final class Stack
                 'web' => $web['version'] ?? null,
                 'webSapi' => $web['sapi'] ?? null,
             ],
-            'webServer' => $serving,
             'installed' => $server ? self::attempt(self::installed(...)) : null,
             'laravel' => app()->version(),
             'database' => self::attempt(self::database(...)),
@@ -145,6 +149,8 @@ final class Stack
             $mtime(base_path('vendor/composer/installed.php')),
             $mtime(app()->getCachedConfigPath()),
             self::packagesChangedAt(),
+            // And when nginx starts: a restart after an upgrade is what puts the fix to work.
+            self::changedAt(self::NGINX_PID),
         ]));
     }
 
@@ -452,8 +458,9 @@ final class Stack
      * and the packager, from a fixed list: `nginx-org`, `ondrej`, `ubuntu`,
      * `debian` or `other`. A distribution's own build carries fixes its
      * version doesn't show, so who packaged it decides how it's judged.
+     * And whether that nginx is the one running (`running`).
      *
-     * @return array{nginx: array{version: string, packager: string}}|null
+     * @return array{nginx: array{version: string, packager: string, running: bool|null}}|null
      */
     private static function installed(): ?array
     {
@@ -473,7 +480,27 @@ final class Stack
             }
         }
 
-        return isset($installed['nginx']) ? ['nginx' => $installed['nginx']] : null;
+        return isset($installed['nginx']) ? ['nginx' => [...$installed['nginx'], 'running' => self::nginxRunsInstalled()]] : null;
+    }
+
+    /**
+     * Whether the nginx that's running is the one that's installed. An
+     * upgrade replaces the program on disk, and nginx keeps running the old
+     * one until it's restarted (a reload doesn't load it). nginx writes its
+     * process id file when it starts, so: started since its program was put
+     * there, it's the installed one (true); started before, it's still the
+     * old one and waits on a restart (false). Two file times, no file read,
+     * no command, no visitor. Null when either can't be seen.
+     */
+    private static function nginxRunsInstalled(): ?bool
+    {
+        $started = self::changedAt(self::NGINX_PID);
+        $program = self::$root.self::NGINX_PROGRAM;
+        clearstatcache(true, $program);
+        // When the file itself was put there, not the date inside the package.
+        $installed = @is_file($program) ? @filectime($program) : false;
+
+        return $started === null || $installed === false ? null : $started >= $installed;
     }
 
     /**
@@ -509,7 +536,15 @@ final class Stack
      */
     private static function packagesChangedAt(): ?int
     {
-        $path = self::$root.self::PACKAGES;
+        return self::changedAt(self::PACKAGES);
+    }
+
+    /**
+     * When a file on the server was last written, or null when it isn't there to see.
+     */
+    private static function changedAt(string $file): ?int
+    {
+        $path = self::$root.$file;
         // PHP remembers what it last saw of a file for the life of the process: ask the disk.
         clearstatcache(true, $path);
         $changed = @is_file($path) ? @filemtime($path) : false;

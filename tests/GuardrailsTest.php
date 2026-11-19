@@ -102,10 +102,10 @@ it('reads files in two places and writes one file', function () {
         ->and(array_keys(filesCalling(['file_put_contents', 'fwrite', 'rename', 'unlink', 'mkdir', 'touch', 'chmod', 'copy', 'symlink', 'tempnam'])))->toBe(['LocalState.php']);
 });
 
-it('reads one thing from a web request, in one place: which web server handed it over', function () {
-    expect(filesCalling(['request']))->toBe(['WebRuntime.php' => ['request']])
-        // A request's headers, body, cookies and address stay where they are.
-        ->and(filesCalling(['server', 'header', 'headers', 'input', 'query', 'cookie', 'cookies', 'ip', 'ips', 'getContent', 'fullUrl', 'userAgent', 'bearerToken', 'session'], methods: true))->toBe(['WebRuntime.php' => ['server']]);
+it('reads nothing of a web request, anywhere', function () {
+    expect(filesCalling(['request']))->toBe([])
+        // A request's server values, headers, body, cookies and address stay where they are.
+        ->and(filesCalling(['server', 'header', 'headers', 'input', 'query', 'cookie', 'cookies', 'ip', 'ips', 'getContent', 'fullUrl', 'userAgent', 'bearerToken', 'session'], methods: true))->toBe([]);
 });
 
 it('reads the environment only to recognise a platform or a deploy, and config only through config()', function () {

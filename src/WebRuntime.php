@@ -7,21 +7,17 @@ use Illuminate\Support\Facades\Cache;
 use Throwable;
 
 /**
- * Which PHP serves web requests, and which web server hands them to it. The
- * scheduler's command-line PHP can be a different version (a server with
- * several installed), and only a web request knows its web server: nginx
- * passes its own version to PHP-FPM with every request (`SERVER_SOFTWARE`,
- * from fastcgi_params), even when it hides it from visitors. So about one
- * web request in 50 notes both, after the response has gone, with one
- * write to the cache. It never reads anything during a request, and does
- * nothing at all when switched off.
+ * Which PHP serves web requests. The scheduler's command-line PHP can be a
+ * different version (a server with several installed), so about one web
+ * request in 50 notes its own, after the response has gone, with one write
+ * to the cache. It reads nothing of the request and nothing during it, and
+ * does nothing at all when switched off.
  *
  * It's chance, not a counter, because PHP-FPM keeps nothing between
  * requests: counting would mean reading the cache on every one. So nothing
- * that matters waits on it: which nginx is installed comes from the
- * scheduler (Stack::installed), with no visitor needed. This only says
- * which one is serving, so SkyLock can tell an upgrade from an upgrade
- * that still needs a restart.
+ * that matters waits on it. Everything about the server (its packages, its
+ * nginx and whether that's been restarted) is read by the scheduler, with
+ * no visitor needed.
  *
  * Each server keeps its own note (by its server key), so servers behind one
  * load balancer that share a cache never take turns at being the one
@@ -34,15 +30,6 @@ final class WebRuntime
     private const ONE_IN = 50;
 
     private const KEEP_DAYS = 7;
-
-    /** Web servers, by how they name themselves to PHP: only these are ever sent. */
-    private const WEB_SERVERS = [
-        'nginx' => 'nginx',
-        'apache' => 'apache',
-        'caddy' => 'caddy',
-        'litespeed' => 'litespeed',
-        'openresty' => 'openresty',
-    ];
 
     /** Under Octane a worker serves many requests: once per worker is enough. */
     private static bool $sampled = false;
@@ -71,7 +58,7 @@ final class WebRuntime
                 return;
             }
 
-            $note = ['version' => PHP_VERSION, 'sapi' => PHP_SAPI, 'server' => self::webServer(), 'at' => time()];
+            $note = ['version' => PHP_VERSION, 'sapi' => PHP_SAPI, 'at' => time()];
             // After the response, but still on the request's record in Nightwatch.
             NightwatchSampling::ignore(fn () => Cache::put(self::key(), $note, now()->addDays(self::KEEP_DAYS)));
             self::$sampled = true;
@@ -81,10 +68,10 @@ final class WebRuntime
     }
 
     /**
-     * This server's note: the web PHP's version and SAPI, the web server when
-     * one said who it is, and when the note was written (0 when it doesn't say).
+     * This server's note: the web PHP's version and SAPI, and when the note
+     * was written (0 when it doesn't say).
      *
-     * @return array{version: string, sapi: string, server: array{product: string, version: string|null, build: string|null}|null, at: int}|null
+     * @return array{version: string, sapi: string, at: int}|null
      */
     public static function read(): ?array
     {
@@ -95,54 +82,17 @@ final class WebRuntime
         }
 
         // The cache is shared with the app, so what comes back is checked like anything else read:
-        // a version and a SAPI name in the characters those have, a web server from the list, or nothing.
-        if (! is_array($runtime)
-            || ! is_string($runtime['version'] ?? null) || preg_match('/^[0-9A-Za-z.+\-]{1,32}$/', $runtime['version']) !== 1
-            || ! is_string($runtime['sapi'] ?? null) || preg_match('/^[a-z0-9._-]{1,32}$/', $runtime['sapi']) !== 1) {
-            return null;
-        }
-
-        $server = is_array($runtime['server'] ?? null) ? $runtime['server'] : null;
-        $valid = $server !== null
-            && in_array($server['product'] ?? null, self::WEB_SERVERS, true)
-            && ($server['version'] === null || (is_string($server['version']) && preg_match('/^\d+(?:\.\d+){0,3}$/', $server['version']) === 1))
-            && in_array($server['build'] ?? null, [null, 'ubuntu', 'debian'], true);
-
-        return [
-            'version' => $runtime['version'],
-            'sapi' => $runtime['sapi'],
-            'server' => $valid ? ['product' => (string) $server['product'], 'version' => $server['version'], 'build' => $server['build'] ?? null] : null,
-            'at' => is_int($runtime['at'] ?? null) ? $runtime['at'] : 0,
-        ];
+        // a version and a SAPI name in the characters those have, or nothing.
+        return is_array($runtime)
+            && is_string($runtime['version'] ?? null) && preg_match('/^[0-9A-Za-z.+\-]{1,32}$/', $runtime['version']) === 1
+            && is_string($runtime['sapi'] ?? null) && preg_match('/^[a-z0-9._-]{1,32}$/', $runtime['sapi']) === 1
+            ? ['version' => $runtime['version'], 'sapi' => $runtime['sapi'], 'at' => is_int($runtime['at'] ?? null) ? $runtime['at'] : 0]
+            : null;
     }
 
     public static function forget(): void
     {
         self::$sampled = false;
-    }
-
-    /**
-     * The web server that handed PHP this request, from its own name for
-     * itself (`nginx/1.28.1`, `Apache/2.4.58 (Ubuntu)`): a product from a
-     * fixed list, its version, and whether a distribution built it. Nothing
-     * else in that value ever leaves the app.
-     *
-     * @return array{product: string, version: string|null, build: string|null}|null
-     */
-    private static function webServer(): ?array
-    {
-        $software = request()->server('SERVER_SOFTWARE');
-        if (! is_string($software) || preg_match('#^([A-Za-z]+)(?:/v?(\d+(?:\.\d+){0,3}))?(?:[^(]*\((Ubuntu|Debian)\))?#', $software, $match) !== 1) {
-            return null;
-        }
-
-        $product = self::WEB_SERVERS[strtolower($match[1])] ?? null;
-
-        return $product === null ? null : [
-            'product' => $product,
-            'version' => ($match[2] ?? '') !== '' ? $match[2] : null,
-            'build' => isset($match[3]) ? strtolower($match[3]) : null,
-        ];
     }
 
     /**

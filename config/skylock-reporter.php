@@ -27,10 +27,10 @@ return [
     'timeout' => 3,
 
     /*
-    | About one web request in 50 notes which PHP served it and which web
-    | server handed it over, after the response has gone, so SkyLock knows
-    | the web PHP and the web server as well as the scheduler's PHP. Set to
-    | false to keep the package out of web requests.
+    | About one web request in 50 notes which PHP served it, after the
+    | response has gone, so SkyLock knows the web PHP as well as the
+    | scheduler's. Nothing of the request is read. Set to false to keep
+    | the package out of web requests.
     */
 
     'web_runtime' => env('SKYLOCK_REPORTER_WEB_RUNTIME', true),

@@ -29,8 +29,7 @@ const SENT = [
         'patching', 'patching.securityUpdates', 'patching.restartPending', 'patching.restartPendingSince', 'patching.restartForKernel',
         'patching.kernel', 'patching.kernel.version', 'patching.kernel.flavour', 'patching.autoUpdates', 'patching.extendedSupport',
         'php.cli', 'php.web', 'php.webSapi',
-        'webServer', 'webServer.product', 'webServer.version', 'webServer.build',
-        'installed', 'installed.nginx.version', 'installed.nginx.packager',
+        'installed', 'installed.nginx.version', 'installed.nginx.packager', 'installed.nginx.running',
         'laravel',
         'database', 'database.product', 'database.version', 'database.build', 'database.provider',
         'cache', 'cache.product', 'cache.version', 'cache.provider',
@@ -74,8 +73,9 @@ it('sends these fields to these four places, and nothing else', function () {
     reporterConfigured();
     ubuntuServer();
     config(['cache.default' => 'file', 'sentry.dsn' => 'https://sentinel-dsn@o1.ingest.sentry.io/1', 'app.key' => 'base64:sentinel-app-key']);
-    // What nginx tells PHP, with something that must never leave the app after it.
+    // Everything a web request carries, none of which may leave the app.
     request()->server->set('SERVER_SOFTWARE', 'nginx/1.28.1 sentinel-build-host');
+    request()->headers->set('X-Forwarded-For', 'sentinel-visitor');
     WebRuntime::sample(always: true);
     $schedule = app(Schedule::class);
     $schedule->command('backup:run --password=sentinel-argument')->daily();
@@ -109,8 +109,7 @@ it('sends these fields to these four places, and nothing else', function () {
     // The top of each payload is exactly this, whatever the server it ran on.
     $first = fn (string $place): array => $sent->first(fn (Request $request): bool => $to($request) === $place)->data();
     expect(array_keys($first('POST health')))->toBe(['phpVersion', 'laravelVersion', 'packageVersion', 'debug', 'production', 'errorMonitoring', 'checks', 'stackHash', 'stackCollectedAt'])
-        ->and(array_keys($first('PUT stack')))->toBe(['schema', 'os', 'patching', 'php', 'webServer', 'installed', 'laravel', 'database', 'cache', 'deployedCommit', 'hosting', 'serverKey', 'errorMonitoring', 'collectedAt'])
-        ->and($first('PUT stack')['webServer'])->toBe(['product' => 'nginx', 'version' => '1.28.1', 'build' => null])
+        ->and(array_keys($first('PUT stack')))->toBe(['schema', 'os', 'patching', 'php', 'installed', 'laravel', 'database', 'cache', 'deployedCommit', 'hosting', 'serverKey', 'errorMonitoring', 'collectedAt'])
         ->and(array_keys($first('PUT schedule')))->toBe(['tasks'])
         ->and(collect($first('PUT schedule')['tasks'])->pluck('label')->all())->toBe(['backup:run', 'sync.sh'])
         ->and($sent->filter(fn (Request $request): bool => $to($request) === 'POST task-events')->map(fn (Request $request): array => array_keys($request->data()))->values()->all())->toBe([
@@ -129,18 +128,17 @@ it('sends these fields about an Ubuntu server’s patching, and nothing else', f
         ->and(array_keys((array) ubuntuPatching()))->toBe(['securityUpdates', 'restartPending', 'restartPendingSince', 'restartForKernel', 'kernel', 'autoUpdates', 'extendedSupport']);
 });
 
-it('sends the web PHP only as a version and a SAPI name, and the web server only from its list, whatever the cache holds', function (mixed $kept, ?array $read) {
+it('sends the web PHP only as a version and a SAPI name, whatever the cache holds', function (mixed $kept, ?array $read) {
     config(['cache.default' => 'file']);
     cache()->put(WebRuntime::CACHE_KEY, $kept, 60);
 
     expect(WebRuntime::read())->toBe($read);
 })->with([
-    'what 0.4 wrote' => [['version' => '8.4.12', 'sapi' => 'fpm-fcgi'], ['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => null, 'at' => 0]],
-    'what it writes' => [['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => ['product' => 'nginx', 'version' => '1.28.1', 'build' => null]], ['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => ['product' => 'nginx', 'version' => '1.28.1', 'build' => null], 'at' => 0]],
-    'a distribution’s version' => [['version' => '8.3.6-1ubuntu0.1', 'sapi' => 'apache2handler', 'server' => ['product' => 'apache', 'version' => '2.4.58', 'build' => 'ubuntu']], ['version' => '8.3.6-1ubuntu0.1', 'sapi' => 'apache2handler', 'server' => ['product' => 'apache', 'version' => '2.4.58', 'build' => 'ubuntu'], 'at' => 0]],
-    'when it was written' => [['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => null, 'at' => 1795000000], ['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => null, 'at' => 1795000000]],
-    'words where the time should be' => [['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => null, 'at' => 'sentinel'], ['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => null, 'at' => 0]],
-    'a web server not on the list' => [['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => ['product' => 'sentinel-proxy', 'version' => '1.0', 'build' => null]], ['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => null, 'at' => 0]],
+    'what 0.4 wrote' => [['version' => '8.4.12', 'sapi' => 'fpm-fcgi'], ['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'at' => 0]],
+    'what it writes' => [['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'at' => 1795000000], ['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'at' => 1795000000]],
+    'what 0.5.0 wrote, with a web server it no longer keeps' => [['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'server' => ['product' => 'nginx', 'version' => '1.28.1', 'build' => null], 'at' => 1795000000], ['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'at' => 1795000000]],
+    'a distribution’s version' => [['version' => '8.3.6-1ubuntu0.1', 'sapi' => 'apache2handler'], ['version' => '8.3.6-1ubuntu0.1', 'sapi' => 'apache2handler', 'at' => 0]],
+    'words where the time should be' => [['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'at' => 'sentinel'], ['version' => '8.4.12', 'sapi' => 'fpm-fcgi', 'at' => 0]],
     'a host where the version should be' => [['version' => 'db-7.internal/secret', 'sapi' => 'fpm-fcgi'], null],
     'words where the SAPI should be' => [['version' => '8.4.12', 'sapi' => 'connection refused'], null],
     'something else entirely' => ['8.4.12', null],
