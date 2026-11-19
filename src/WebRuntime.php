@@ -12,9 +12,16 @@ use Throwable;
  * several installed), and only a web request knows its web server: nginx
  * passes its own version to PHP-FPM with every request (`SERVER_SOFTWARE`,
  * from fastcgi_params), even when it hides it from visitors. So about one
- * web request in 500 notes both, after the response has gone, with one
+ * web request in 50 notes both, after the response has gone, with one
  * write to the cache. It never reads anything during a request, and does
  * nothing at all when switched off.
+ *
+ * It's chance, not a counter, because PHP-FPM keeps nothing between
+ * requests: counting would mean reading the cache on every one. So nothing
+ * that matters waits on it: which nginx is installed comes from the
+ * scheduler (Stack::installed), with no visitor needed. This only says
+ * which one is serving, so SkyLock can tell an upgrade from an upgrade
+ * that still needs a restart.
  *
  * Each server keeps its own note (by its server key), so servers behind one
  * load balancer that share a cache never take turns at being the one
@@ -24,7 +31,7 @@ final class WebRuntime
 {
     public const CACHE_KEY = 'skylock-reporter:web-runtime';
 
-    private const ONE_IN = 500;
+    private const ONE_IN = 50;
 
     private const KEEP_DAYS = 7;
 
@@ -64,7 +71,7 @@ final class WebRuntime
                 return;
             }
 
-            $note = ['version' => PHP_VERSION, 'sapi' => PHP_SAPI, 'server' => self::webServer()];
+            $note = ['version' => PHP_VERSION, 'sapi' => PHP_SAPI, 'server' => self::webServer(), 'at' => time()];
             // After the response, but still on the request's record in Nightwatch.
             NightwatchSampling::ignore(fn () => Cache::put(self::key(), $note, now()->addDays(self::KEEP_DAYS)));
             self::$sampled = true;
@@ -74,10 +81,10 @@ final class WebRuntime
     }
 
     /**
-     * This server's note: the web PHP's version and SAPI, and the web server
-     * when one said who it is.
+     * This server's note: the web PHP's version and SAPI, the web server when
+     * one said who it is, and when the note was written (0 when it doesn't say).
      *
-     * @return array{version: string, sapi: string, server: array{product: string, version: string|null, build: string|null}|null}|null
+     * @return array{version: string, sapi: string, server: array{product: string, version: string|null, build: string|null}|null, at: int}|null
      */
     public static function read(): ?array
     {
@@ -105,6 +112,7 @@ final class WebRuntime
             'version' => $runtime['version'],
             'sapi' => $runtime['sapi'],
             'server' => $valid ? ['product' => (string) $server['product'], 'version' => $server['version'], 'build' => $server['build'] ?? null] : null,
+            'at' => is_int($runtime['at'] ?? null) ? $runtime['at'] : 0,
         ];
     }
 

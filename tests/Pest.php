@@ -75,6 +75,29 @@ function ubuntuServer(): void
     serverFile('/proc/version_signature', "Ubuntu 5.15.0-125.135-generic 5.15.167\n");
     touch(test()->root.'/var/run/reboot-required', strtotime('2026-10-30 02:05:00 UTC'));
     serverFile('/etc/apt/apt.conf.d/20auto-upgrades', "APT::Periodic::Update-Package-Lists \"1\";\nAPT::Periodic::Unattended-Upgrade \"1\";\n");
+    serverFile('/var/lib/dpkg/status', packageList(packageEntry('nginx', '1.28.1-1~jammy', 'NGINX Packaging <nginx-packaging@f5.com>')));
+}
+
+/**
+ * One entry of the package manager's list, as dpkg writes it.
+ */
+function packageEntry(string $package, string $version, string $maintainer, string $status = 'install ok installed'): string
+{
+    return "Package: {$package}\nStatus: {$status}\nPriority: optional\nSection: httpd\nInstalled-Size: 1340\nMaintainer: {$maintainer}\nArchitecture: amd64\nVersion: {$version}\nDescription: sentinel-description of {$package}\n";
+}
+
+/**
+ * A server's package list around the entries given: ordinary packages, and
+ * one of the client's own that must never leave the server.
+ */
+function packageList(string ...$entries): string
+{
+    return implode("\n", [
+        packageEntry('adduser', '3.137ubuntu1', 'Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>'),
+        packageEntry('sentinel-client-billing-agent', '4.2.0-sentinel1', 'Sentinel Ops <ops@sentinel-client.example>'),
+        ...$entries,
+        packageEntry('zlib1g', '1:1.3.dfsg-3.1ubuntu2.1', 'Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>'),
+    ]);
 }
 
 /**
