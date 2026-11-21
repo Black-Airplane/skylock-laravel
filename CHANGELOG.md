@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Booting with a token no longer opens a queue connection.** The reporter registered its job-payload hook through the `Queue` facade. Before Laravel 13.x gave the queue manager its own `createPayloadUsing()`, that call opened the app's default connection while providers were still booting. On an app whose connection driver is registered by one of its own providers (they boot after packages), every artisan command failed with "No connector for [...]" as soon as a token was set, including `schedule:run`. Seen on Laravel 13.4 with a custom `sqs-bulk` driver. The hook is now set on the queue base class directly, which needs no connection.
+
 ## 0.5.2
 
 Whether nginx was restarted, from the scheduler; and nothing is read from a web request any more.
