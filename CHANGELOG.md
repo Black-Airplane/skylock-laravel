@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.2
+
+The security updates a server is waiting for are only ones for packages it has installed.
+
+- **Counted from apt's own lists, not Ubuntu's login message.** Ubuntu's count imagines `apt full-upgrade` and counts every package it would take from the security pocket, new packages included. A library that an upgrade from `-updates` newly needs, and that's also in the security pocket, is a "security update" though nothing installed is missing a fix. Unattended upgrades only upgrade what's installed, so they never clear it. In November 2026 that kept a P2 open on one of our own servers for five days: Ubuntu said 2, and both were libraries nothing had installed. The reporter now counts installed packages with a newer version in the release's security pocket, from `/var/lib/dpkg/status` and `/var/lib/apt/lists`. A package that's held back, or comes from another source, still counts while Ubuntu has a newer security version of it.
+- **Versions are ordered as dpkg orders them.** CI holds the order and the count against apt itself on Ubuntu 22.04 and 24.04, over every package the archive has more than one version of.
+- **Still only a number leaves the server.** The lists are read a few megabytes at a time, at most once an hour (and after a deploy or a change to the server's packages): under a tenth of a second and about 17 MB on Ubuntu 24.04. Where apt keeps its lists compressed, as Docker's Ubuntu images do, or they can't be read whole, Ubuntu's count is sent, as before. Debian is unchanged.
+
 ## 0.6.1
 
 A minute report killed part-way, by a deploy or a restart, no longer stops the next four. Update from 0.6.0 before anything else.

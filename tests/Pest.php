@@ -90,7 +90,7 @@ function serverFile(string $path, string $contents = ''): void
 
 function ubuntuServer(): void
 {
-    serverFile('/etc/os-release', "NAME=\"Ubuntu\"\nVERSION_ID=\"22.04\"\nID=ubuntu\nPRETTY_NAME=\"Ubuntu 22.04.5 LTS\"\n");
+    serverFile('/etc/os-release', "NAME=\"Ubuntu\"\nVERSION_ID=\"22.04\"\nID=ubuntu\nPRETTY_NAME=\"Ubuntu 22.04.5 LTS\"\nVERSION_CODENAME=jammy\nUBUNTU_CODENAME=jammy\n");
     serverFile('/etc/machine-id', "0123456789abcdef0123456789abcdef\n");
     serverFile('/var/lib/update-notifier/updates-available', "\n12 updates can be applied immediately.\n4 of these updates are standard security updates.\nTo see these additional updates run: apt list --upgradable\n");
     serverFile('/var/run/reboot-required', "*** System restart required ***\n");
@@ -125,6 +125,26 @@ function packageList(string ...$entries): string
         ...$entries,
         packageEntry('zlib1g', '1:1.3.dfsg-3.1ubuntu2.1', 'Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>'),
     ]);
+}
+
+/**
+ * apt's saved list of what a release's security pocket offers, for one
+ * component and architecture, beside the Release file that says whose
+ * archive it is.
+ */
+function securityPocket(string $entries, string $component = 'main', string $architecture = 'amd64', string $origin = 'Ubuntu', string $source = 'security.ubuntu.com_ubuntu'): void
+{
+    serverFile("/var/lib/apt/lists/{$source}_dists_jammy-security_InRelease", "-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA512\n\nOrigin: {$origin}\nLabel: {$origin}\nSuite: jammy-security\nVersion: 22.04\nCodename: jammy\n");
+    serverFile("/var/lib/apt/lists/{$source}_dists_jammy-security_{$component}_binary-{$architecture}_Packages", $entries);
+}
+
+/**
+ * One entry of a list apt saves from a source. Its description goes on
+ * over lines that start with a space, as long ones do.
+ */
+function listEntry(string $package, string $version, string $architecture = 'amd64'): string
+{
+    return "Package: {$package}\nArchitecture: {$architecture}\nVersion: {$version}\nPriority: optional\nSection: libs\nMaintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>\nDescription: sentinel-description of {$package}\n Package: not a field, part of the description\n .\n Version: 0.0\n";
 }
 
 /**

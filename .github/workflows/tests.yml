@@ -54,3 +54,33 @@ jobs:
 
       - name: PHPStan
         run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
+
+  real-server:
+    # The security count and version order, held against apt itself on a real Ubuntu (tests/RealServerTest.php).
+    name: Against apt, Ubuntu ${{ matrix.ubuntu }}
+    runs-on: ubuntu-${{ matrix.ubuntu }}
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['22.04', '24.04']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+
+      - run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Fresh lists, kept as a server keeps them
+        run: |
+          sudo rm -f /etc/apt/apt.conf.d/*gzip-indexes*
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-apt
+          ls -l /var/lib/apt/lists | grep -- '-security_'
+
+      - name: Test
+        run: vendor/bin/pest tests/RealServerTest.php
+        env:
+          SKYLOCK_REAL_SERVER: '1'

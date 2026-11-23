@@ -103,6 +103,111 @@ it('leaves the kernel to Ubuntu: Debian writes no build line', function () {
     expect(Closure::bind(fn (): ?array => Stack::patching('debian'), null, Stack::class)()['kernel'])->toBeNull();
 });
 
+/**
+ * An entry of dpkg's list, for an architecture and status packageEntry() doesn't write.
+ */
+function dpkgEntry(string $package, string $version, string $architecture = 'amd64', string $status = 'install ok installed'): string
+{
+    return "Package: {$package}\nStatus: {$status}\nPriority: optional\nArchitecture: {$architecture}\nVersion: {$version}\nDescription: sentinel-description of {$package}\n";
+}
+
+it('counts the installed packages a security fix waits for, not the new ones a full upgrade would add', function () {
+    // Ubuntu's own count says 4. Control Tower's server, November 2026: Ubuntu said 2,
+    // both libraries nothing had installed, which unattended upgrades never would.
+    ubuntuServer();
+    securityPocket(implode("\n", [
+        listEntry('adduser', '3.137ubuntu1'),
+        listEntry('zlib1g', '1:1.3.dfsg-3.1ubuntu2.2'),
+        listEntry('libdrm-amdgpu1', '2.4.125-1ubuntu0.1~22.04.2'),
+        listEntry('libabsl20220623t64', '20220623.1-3.1ubuntu3.2'),
+        // Ubuntu's nginx, older than the nginx.org build installed.
+        listEntry('nginx', '1.18.0-6ubuntu14.6'),
+    ]));
+
+    expect(ubuntuPatching()['securityUpdates'])->toBe(1)
+        // Only the count leaves the server.
+        ->and(json_encode(ubuntuPatching()))->not->toContain('zlib')->not->toContain('libdrm')->not->toContain('3.1ubuntu')
+        // Debian's lists aren't read: its count is still the one Ubuntu's tools would write.
+        ->and(Closure::bind(fn (): ?array => Stack::patching('debian'), null, Stack::class)()['securityUpdates'])->toBe(4);
+});
+
+it('counts a package held back or from another source while the security pocket has a newer version, and nothing removed', function () {
+    ubuntuServer();
+    serverFile('/var/lib/dpkg/status', implode("\n", [
+        dpkgEntry('libssl3', '3.0.2-0ubuntu1.18', status: 'hold ok installed'),
+        // Ondřej's build of a library Ubuntu has since fixed.
+        dpkgEntry('libgd3', '2.3.3-9ubuntu5+ubuntu22.04.1+deb.sury.org+1'),
+        // Ubuntu Pro's build, newer than the security pocket's.
+        dpkgEntry('libxml2', '2.9.13+dfsg-1ubuntu0.3+esm1'),
+        // Removed, its settings kept: nothing runs it.
+        dpkgEntry('curl', '7.81.0-1ubuntu1.10', status: 'deinstall ok config-files'),
+        dpkgEntry('libtiff5', '4.3.0-6ubuntu0.8', status: 'install ok half-installed'),
+    ]));
+    securityPocket(implode("\n", [
+        listEntry('libssl3', '3.0.2-0ubuntu1.19'),
+        listEntry('libgd3', '2.3.3-9ubuntu5.1'),
+        listEntry('libxml2', '2.9.13+dfsg-1ubuntu0.3'),
+        listEntry('curl', '7.81.0-1ubuntu1.20'),
+        listEntry('libtiff5', '4.3.0-6ubuntu0.10'),
+    ]));
+
+    expect(ubuntuPatching()['securityUpdates'])->toBe(2);
+});
+
+it('counts each architecture apt installed a package for, and a package for all of them once', function () {
+    ubuntuServer();
+    serverFile('/var/lib/dpkg/status', implode("\n", [
+        dpkgEntry('libc6', '2.35-0ubuntu3.8'),
+        dpkgEntry('libc6', '2.35-0ubuntu3.8', 'i386'),
+        dpkgEntry('tzdata', '2024a-0ubuntu0.22.04', 'all'),
+    ]));
+    securityPocket(listEntry('libc6', '2.35-0ubuntu3.9')."\n".listEntry('tzdata', '2025b-0ubuntu0.22.04', 'all'));
+    securityPocket(listEntry('libc6', '2.35-0ubuntu3.9', 'i386')."\n".listEntry('tzdata', '2025b-0ubuntu0.22.04', 'all'), architecture: 'i386');
+
+    expect(ubuntuPatching()['securityUpdates'])->toBe(3);
+});
+
+it('counts from Ubuntu’s archive whichever mirror serves it, and from no one else’s', function () {
+    ubuntuServer();
+    securityPocket(listEntry('zlib1g', '1:1.3.dfsg-3.1ubuntu2.2'), source: 'mirrors.digitalocean.com_ubuntu');
+    securityPocket(listEntry('adduser', '3.137ubuntu2'), source: 'packages.sentinel.example_apt', origin: 'Sentinel');
+
+    expect(ubuntuPatching()['securityUpdates'])->toBe(1);
+});
+
+it('reads a list bigger than it reads at once, an entry across the seam included', function () {
+    ubuntuServer();
+    $filler = fn (int $i): string => listEntry(sprintf('filler-%06d', $i), '1.0-1');
+    $length = strlen($filler(0)) + 1;
+    // The entry that starts within one entry of the 4 MB a read takes.
+    $seam = intdiv(4 * 1024 * 1024, $length);
+    $entries = array_map($filler, range(0, $seam + 5000));
+    $entries[$seam] = listEntry('adduser', '3.137ubuntu2');
+    $entries[] = listEntry('zlib1g', '1:1.3.dfsg-3.1ubuntu2.2');
+    securityPocket(implode("\n", $entries));
+
+    expect(filesize($this->root.'/var/lib/apt/lists/security.ubuntu.com_ubuntu_dists_jammy-security_main_binary-amd64_Packages'))->toBeGreaterThan(5 * 1024 * 1024)
+        ->and(ubuntuPatching()['securityUpdates'])->toBe(2);
+});
+
+it('sends Ubuntu’s own count when it can’t read apt’s lists whole', function (Closure $change) {
+    ubuntuServer();
+    securityPocket(listEntry('zlib1g', '1:1.3.dfsg-3.1ubuntu2.2'));
+    expect(ubuntuPatching()['securityUpdates'])->toBe(1);
+
+    $change(test()->root.'/var/lib/apt/lists/security.ubuntu.com_ubuntu_dists_jammy-security_');
+
+    expect(ubuntuPatching()['securityUpdates'])->toBe(4);
+})->with([
+    'no lists for its release' => fn (string $pocket) => rename($pocket.'main_binary-amd64_Packages', str_replace('jammy', 'focal', $pocket).'main_binary-amd64_Packages'),
+    'lists apt keeps compressed' => fn (string $pocket) => rename($pocket.'main_binary-amd64_Packages', $pocket.'main_binary-amd64_Packages.lz4'),
+    'one list compressed' => fn (string $pocket) => file_put_contents($pocket.'universe_binary-amd64_Packages.lz4', 'lz4'),
+    'another archive’s pocket' => fn (string $pocket) => file_put_contents($pocket.'InRelease', "Origin: Sentinel\nSuite: jammy-security\n"),
+    'no Release file' => fn (string $pocket) => unlink($pocket.'InRelease'),
+    'no release name' => fn () => serverFile('/etc/os-release', "NAME=\"Ubuntu\"\nVERSION_ID=\"22.04\"\nID=ubuntu\n"),
+    'no package list' => fn () => unlink(test()->root.'/var/lib/dpkg/status'),
+]);
+
 it('leaves out what it can’t read instead of guessing', function () {
     $stack = Stack::collect();
 
