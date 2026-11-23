@@ -158,6 +158,27 @@ it('drops a batch SkyLock read and refused, which it would refuse every minute',
         ->and(LocalState::takeNoted())->toBe([]);
 });
 
+it('sends what was noted one at a time, once SkyLock stops taking batches, until its time is up', function () {
+    $sent = new ArrayObject;
+    Http::fake(function (Request $request) use ($sent) {
+        if (str_ends_with($request->url(), '/task-events')) {
+            $sent[] = $request['event'];
+            // A slow SkyLock: each event takes four seconds.
+            test()->travel(4)->seconds();
+        }
+
+        return Http::response(['accepted' => true, 'scheduleKnown' => true, 'stackKnown' => true, 'taskEventBatches' => false], 202);
+    });
+    foreach (range(1, 5) as $n) {
+        LocalState::note(TaskEvents::noted(ScheduledTasks::key($this->daily), 'starting'));
+    }
+
+    minuteReportRuns();
+
+    expect($sent)->toHaveCount(3)
+        ->and(LocalState::takeNoted())->toHaveCount(2);
+});
+
 it('sends at most a hundred events in a batch', function () {
     $batches = batchesTo();
     skyLockTakesBatches();

@@ -130,7 +130,7 @@ class ReportCommand extends Command
         if (! $batches) {
             // A SkyLock that doesn't take batches (any more): one at a time, as before 0.6.
             foreach ($noted as $i => $event) {
-                if (! $events->sendNoted($event)) {
+                if (! Date::now()->lessThan($until) || ! $events->sendNoted($event)) {
                     LocalState::keepNoted(array_slice($noted, $i));
 
                     return;
