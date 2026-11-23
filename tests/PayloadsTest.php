@@ -1,6 +1,7 @@
 <?php
 
 use BlackAirplane\SkyLockReporter\Stack;
+use BlackAirplane\SkyLockReporter\TaskEvents;
 use BlackAirplane\SkyLockReporter\WebRuntime;
 use Illuminate\Console\Events\ScheduledTaskFailed;
 use Illuminate\Console\Events\ScheduledTaskFinished;
@@ -37,6 +38,8 @@ const SENT = [
     ],
     'PUT schedule' => ['tasks.*.key', 'tasks.*.label', 'tasks.*.expression', 'tasks.*.timezone'],
     'POST task-events' => ['key', 'event', 'reason', 'durationMs'],
+    // From 0.6, what the scheduler noted, sent by the minute report: the same fields, and an id made for the batch.
+    'POST task-events/batch' => ['events.*.id', 'events.*.key', 'events.*.event', 'events.*.reason', 'events.*.durationMs'],
 ];
 
 /**
@@ -69,7 +72,7 @@ afterEach(function () {
     exec('rm -rf '.escapeshellarg($this->root));
 });
 
-it('sends these fields to these four places, and nothing else', function () {
+it('sends these fields to these five places, and nothing else', function () {
     reporterConfigured();
     ubuntuServer();
     config(['cache.default' => 'file', 'sentry.dsn' => 'https://sentinel-dsn@o1.ingest.sentry.io/1', 'app.key' => 'base64:sentinel-app-key']);
@@ -80,17 +83,26 @@ it('sends these fields to these four places, and nothing else', function () {
     $schedule = app(Schedule::class);
     $schedule->command('backup:run --password=sentinel-argument')->daily();
     $schedule->exec('API_KEY=sentinel-variable /home/forge/sentinel-path/bin/sync.sh')->hourly();
-    Http::fake([
-        'skylock.example/api/ingest/health' => Http::response(['accepted' => true, 'scheduleKnown' => false, 'stackKnown' => false], 202),
-        '*' => Http::response(['accepted' => true, 'known' => true], 202),
-    ]);
-
-    $this->artisan('skylock:report')->assertSuccessful();
+    $batches = new ArrayObject(['taken' => false]);
+    Http::fake(fn (Request $request) => str_ends_with($request->url(), '/api/ingest/health')
+        ? Http::response(['accepted' => true, 'scheduleKnown' => false, 'stackKnown' => false, 'taskEventBatches' => $batches['taken']], 202)
+        : Http::response(['accepted' => true, 'known' => true], 202));
     $task = collect($schedule->events())->first(fn ($event): bool => str_contains((string) $event->command, 'backup:run'));
-    event(new ScheduledTaskStarting($task));
-    event(new ScheduledTaskFinished($task, 1.5));
-    event(new ScheduledTaskFailed($task, new RuntimeException('connection to sentinel-host.internal refused')));
-    event(new ScheduledTaskSkipped($task));
+    $runs = function () use ($task): void {
+        event(new ScheduledTaskStarting($task));
+        event(new ScheduledTaskFinished($task, 1.5));
+        event(new ScheduledTaskFailed($task, new RuntimeException('connection to sentinel-host.internal refused')));
+        event(new ScheduledTaskSkipped($task));
+    };
+
+    // Sent one at a time, then noted and sent by the minute report once SkyLock takes batches.
+    $this->artisan('skylock:report')->assertSuccessful();
+    $runs();
+    $batches['taken'] = true;
+    $this->artisan('skylock:report')->assertSuccessful();
+    app()->forgetInstance(TaskEvents::class);
+    $runs();
+    $this->artisan('skylock:report')->assertSuccessful();
 
     $sent = Http::recorded()->map(fn (array $pair): Request => $pair[0]);
     $to = fn (Request $request): string => $request->method().' '.str_replace('https://skylock.example/api/ingest/', '', $request->url());
@@ -117,6 +129,14 @@ it('sends these fields to these four places, and nothing else', function () {
             ['key', 'event', 'durationMs'],
             ['key', 'event'],
             ['key', 'event', 'reason'],
+        ])
+        // When it was noted stays on the server.
+        ->and(array_keys($first('POST task-events/batch')))->toBe(['events'])
+        ->and(array_map(array_keys(...), $first('POST task-events/batch')['events']))->toBe([
+            ['id', 'key', 'event'],
+            ['id', 'key', 'event', 'durationMs'],
+            ['id', 'key', 'event'],
+            ['id', 'key', 'event', 'reason'],
         ]);
 });
 

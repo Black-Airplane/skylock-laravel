@@ -24,6 +24,9 @@ final class SkyLockClient
     /** The last send didn't go through because SkyLock revoked the token. */
     private bool $revoked = false;
 
+    /** The status SkyLock answered the last send with; null when nothing answered. */
+    private ?int $status = null;
+
     public function configured(): bool
     {
         return is_string(config('skylock-reporter.token')) && config('skylock-reporter.token') !== '';
@@ -45,11 +48,13 @@ final class SkyLockClient
     /**
      * @param  array<string, mixed>  $payload
      * @param  bool  $force  send even when the token was revoked (someone ran a command to check)
+     * @param  int|null  $timeout  seconds; the minute report, which nothing waits on, gives SkyLock longer
      * @return array<string, mixed>|null the response, or null when it didn't get through
      */
-    public function send(string $method, string $path, array $payload, bool $force = false): ?array
+    public function send(string $method, string $path, array $payload, bool $force = false, ?int $timeout = null): ?array
     {
         $this->revoked = false;
+        $this->status = null;
         if (! $this->configured()) {
             return null;
         }
@@ -70,10 +75,11 @@ final class SkyLockClient
         try {
             $response = Http::withToken((string) config('skylock-reporter.token'))
                 ->acceptJson()
-                ->timeout((int) config('skylock-reporter.timeout', 3))
+                ->timeout($timeout ?? (int) config('skylock-reporter.timeout', 3))
                 ->connectTimeout(2)
                 ->withoutRedirecting()
                 ->send($method, $this->url().'/api/ingest/'.$path, ['json' => $payload]);
+            $this->status = $response->status();
 
             if ($response->successful()) {
                 if ($held) {
@@ -102,6 +108,15 @@ final class SkyLockClient
     public function revoked(): bool
     {
         return $this->revoked;
+    }
+
+    /**
+     * SkyLock read the last send and won't take it, however often it comes:
+     * it can't read it (4xx), not that it was busy (408, 429) or down.
+     */
+    public function refused(): bool
+    {
+        return $this->status !== null && $this->status >= 400 && $this->status < 500 && ! in_array($this->status, [408, 429], true);
     }
 
     private function url(): string

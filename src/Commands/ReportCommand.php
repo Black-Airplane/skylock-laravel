@@ -9,22 +9,38 @@ use BlackAirplane\SkyLockReporter\Revocation;
 use BlackAirplane\SkyLockReporter\ScheduledTasks;
 use BlackAirplane\SkyLockReporter\SkyLockClient;
 use BlackAirplane\SkyLockReporter\Stack;
+use BlackAirplane\SkyLockReporter\TaskEvents;
 use Composer\InstalledVersions;
 use Illuminate\Console\Command;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Date;
+use Illuminate\Support\Sleep;
 use Throwable;
 
 class ReportCommand extends Command
 {
-    protected $signature = 'skylock:report';
+    protected $signature = 'skylock:report
+        {--spread : Wait for this app\'s own second of the minute before sending (the scheduler passes it)}';
 
     protected $description = 'Send this app\'s health to SkyLock (runs every minute from the scheduler)';
 
     /** How long what the app runs on is kept before it's read again, when nothing is deployed. */
     public const STACK_SECONDS = 3600;
 
-    public function handle(SkyLockClient $client, HealthChecks $checks, Schedule $schedule, QueuedOutcomes $outcomes): int
+    /** The earliest second past the minute an app reports at, */
+    public const SPREAD_FROM = 5;
+
+    /** and how many seconds the apps are spread across: 5 to 39 past the minute. */
+    public const SPREAD_SECONDS = 35;
+
+    /** Nothing waits on the report, so SkyLock gets longer to answer it than a task event sent from the scheduler. */
+    public const TIMEOUT = 10;
+
+    /** What follows the health report starts within this long of it, so a report ends before the next minute's starts. */
+    public const SEND_FOR_SECONDS = 10;
+
+    public function handle(SkyLockClient $client, HealthChecks $checks, Schedule $schedule, QueuedOutcomes $outcomes, TaskEvents $events): int
     {
         if (! $client->configured()) {
             $this->components->warn('SKYLOCK_REPORTER_TOKEN isn\'t set, so nothing was sent.');
@@ -37,38 +53,104 @@ class ReportCommand extends Command
             return self::SUCCESS;
         }
 
+        if ($this->option('spread')) {
+            $this->waitForOwnSecond();
+        }
+        $until = Date::now()->addSeconds(self::SEND_FOR_SECONDS);
+
         $read = self::stack();
         $response = $client->send('POST', 'health', [
             ...self::payload($checks->run()),
             'stackHash' => self::hash($read['stack']),
             'stackCollectedAt' => $read['collectedAt'],
-        ]);
+        ], timeout: self::TIMEOUT);
+
+        // Whether SkyLock takes task events in batches: the scheduler notes them for this report while it does.
+        $batches = ($response['taskEventBatches'] ?? false) === true;
+        if ($response !== null && LocalState::get('taskEventBatches') !== $batches) {
+            LocalState::put('taskEventBatches', $batches);
+        }
 
         // What it runs on changes rarely: sent when it does or when SkyLock doesn't have it,
         // and read again first when someone has asked SkyLock to check now.
-        if ($response !== null && ($response['refreshStack'] ?? false) === true) {
+        if ($response !== null && Date::now()->lessThan($until) && ($response['refreshStack'] ?? false) === true) {
             $read = self::stack(fresh: true);
-            $client->send('PUT', 'stack', self::stackPayload($read));
-        } elseif ($response !== null && ($response['stackKnown'] ?? true) !== true) {
-            $client->send('PUT', 'stack', self::stackPayload($read));
+            $client->send('PUT', 'stack', self::stackPayload($read), timeout: self::TIMEOUT);
+        } elseif ($response !== null && Date::now()->lessThan($until) && ($response['stackKnown'] ?? true) !== true) {
+            $client->send('PUT', 'stack', self::stackPayload($read), timeout: self::TIMEOUT);
         }
 
-        // Send the schedule when it changed, or when SkyLock doesn't have it yet.
+        // Send the schedule when it changed, or when SkyLock doesn't have it yet. Before the task
+        // events, so SkyLock knows a task that was just added when its events arrive.
         $tasks = ScheduledTasks::all($schedule);
         $hash = sha1((string) json_encode($tasks));
-        if ($response !== null && (($response['scheduleKnown'] ?? false) !== true || LocalState::get('schedule') !== $hash)) {
-            if ($client->send('PUT', 'schedule', ['tasks' => $tasks]) !== null) {
+        if ($response !== null && Date::now()->lessThan($until) && (($response['scheduleKnown'] ?? false) !== true || LocalState::get('schedule') !== $hash)) {
+            if ($client->send('PUT', 'schedule', ['tasks' => $tasks], timeout: self::TIMEOUT) !== null) {
                 LocalState::put('schedule', $hash);
             }
         }
 
-        // How scheduled tasks' queued work went since the last report. While
-        // SkyLock can't be reached it waits for the next one.
+        // What scheduled tasks did since the last report. While SkyLock can't
+        // be reached it waits for the next one.
         if ($response !== null) {
-            $outcomes->send();
+            $this->sendTaskEvents($events, $outcomes, $batches, $until);
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * This app's second of the minute, taken from its token. Every app's
+     * scheduler starts its report at the top of the minute, and SkyLock heard
+     * from them all within the same few seconds; each now reports at its own.
+     */
+    public static function second(string $token): int
+    {
+        return self::SPREAD_FROM + (int) hexdec(substr(hash('sha256', 'skylock-report-second|'.$token), 0, 7)) % self::SPREAD_SECONDS;
+    }
+
+    private function waitForOwnSecond(): void
+    {
+        $wait = self::second((string) config('skylock-reporter.token')) - (int) Date::now()->format('s');
+        if ($wait > 0) {
+            Sleep::for($wait)->seconds();
+        }
+    }
+
+    /**
+     * What the scheduler noted, then what queued work did (it finishes runs the
+     * scheduler started), oldest first, in batches. What doesn't get through
+     * is kept on the server for the next report; a batch SkyLock read and
+     * refused would be refused again, so it isn't.
+     */
+    private function sendTaskEvents(TaskEvents $events, QueuedOutcomes $outcomes, bool $batches, Carbon $until): void
+    {
+        $noted = LocalState::takeNoted();
+
+        if (! $batches) {
+            // A SkyLock that doesn't take batches (any more): one at a time, as before 0.6.
+            foreach ($noted as $i => $event) {
+                if (! Date::now()->lessThan($until) || ! $events->sendNoted($event)) {
+                    LocalState::keepNoted(array_slice($noted, $i));
+
+                    return;
+                }
+            }
+            LocalState::keepNoted([]);
+            $outcomes->send();
+
+            return;
+        }
+
+        $waiting = [...$noted, ...$outcomes->take()];
+        foreach (array_chunk($waiting, TaskEvents::BATCH) as $i => $batch) {
+            if (! Date::now()->lessThan($until) || $events->sendBatch($batch, self::TIMEOUT) === 'failed') {
+                LocalState::keepNoted(array_slice($waiting, $i * TaskEvents::BATCH));
+
+                return;
+            }
+        }
+        LocalState::keepNoted([]);
     }
 
     /**

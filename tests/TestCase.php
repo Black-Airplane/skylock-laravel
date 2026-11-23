@@ -23,7 +23,9 @@ abstract class TestCase extends Orchestra
 
     protected function tearDown(): void
     {
-        @unlink((string) LocalState::$path);
+        foreach (['', '.noted', '.kept'] as $file) {
+            @unlink(LocalState::$path.$file);
+        }
         LocalState::$path = null;
 
         parent::tearDown();
