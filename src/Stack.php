@@ -68,6 +68,19 @@ final class Stack
     /** That list is a few megabytes on a busy server; every other file read stops at 64 KB. */
     private const PACKAGES_BYTES = 16 * 1024 * 1024;
 
+    /** apt's copy of what each of the server's sources offers, saved by every `apt update`. */
+    private const APT_LISTS = '/var/lib/apt/lists';
+
+    /**
+     * Those lists and the package list are read this much at a time, whole
+     * entries only, so none of them is ever in memory at once: Ubuntu's
+     * security lists run to tens of megabytes late in a release's life.
+     */
+    private const LIST_CHUNK_BYTES = 4 * 1024 * 1024;
+
+    /** A list bigger than this isn't one apt wrote: Ubuntu's own count is sent instead. */
+    private const LIST_MAX_BYTES = 256 * 1024 * 1024;
+
     /** Where nginx writes its process id when it starts, and its program: every packager's nginx uses these. */
     private const NGINX_PID = '/run/nginx.pid';
 
@@ -178,12 +191,12 @@ final class Stack
     }
 
     /**
-     * Debian and Ubuntu only: pending security updates (from the count
-     * update-notifier keeps), whether a restart is needed to finish
-     * installing them (since when, and whether it's for a new kernel),
-     * which kernel is running (Ubuntu), whether security updates install
-     * themselves, and whether Ubuntu Pro's extended support is on. Other
-     * systems: null.
+     * Debian and Ubuntu only: pending security updates (on Ubuntu, counted
+     * from apt's own lists; see securityUpdates()), whether a restart is
+     * needed to finish installing them (since when, and whether it's for a
+     * new kernel), which kernel is running (Ubuntu), whether security
+     * updates install themselves, and whether Ubuntu Pro's extended support
+     * is on. Other systems: null.
      *
      * @return array{securityUpdates: int|null, restartPending: bool|null, restartPendingSince: string|null, restartForKernel: bool|null, kernel: array{version: string, flavour: string}|null, autoUpdates: bool, extendedSupport: bool}|null
      */
@@ -193,10 +206,15 @@ final class Stack
             return null;
         }
 
+        // Ubuntu's own count, as update-notifier writes it for the login message.
         $notice = self::read('/var/lib/update-notifier/updates-available');
         $security = null;
         if ($notice !== null) {
             $security = preg_match('/(\d+)\s+(?:of these\s+)?updates?\s+(?:are|is)\s+(?:standard\s+)?security updates?/i', $notice, $match) === 1 ? (int) $match[1] : 0;
+        }
+
+        if ($id === 'ubuntu') {
+            $security = self::attempt(self::securityUpdates(...)) ?? $security;
         }
 
         return [
@@ -206,6 +224,189 @@ final class Stack
             'autoUpdates' => preg_match('/APT::Periodic::Unattended-Upgrade\s+"1"/', (string) self::read('/etc/apt/apt.conf.d/20auto-upgrades')) === 1,
             'extendedSupport' => self::exists('/etc/apt/sources.list.d/ubuntu-esm-infra.sources') || self::exists('/etc/apt/sources.list.d/ubuntu-esm-infra.list'),
         ];
+    }
+
+    /**
+     * How many installed packages have a newer version in the release's
+     * security pocket (`noble-security`), from the two lists apt keeps
+     * itself: what's installed (/var/lib/dpkg/status), and what each source
+     * offers (/var/lib/apt/lists, saved by every `apt update`).
+     *
+     * Ubuntu's own count imagines `apt full-upgrade` and counts everything it
+     * would take from the security pocket, new packages included. A library
+     * that an upgrade from `-updates` newly needs counts as a security update
+     * though nothing on the server is missing a fix, and unattended upgrades,
+     * which only upgrade what's installed, never clear it. This counts only
+     * what's installed. Newer is by dpkg's own order (DebianVersion),
+     * whichever source the installed version came from, so a package that's
+     * held back, or pinned to another source, still counts while the
+     * security pocket has a version it doesn't.
+     *
+     * Only the count leaves the server, never a package's name or version.
+     * Null when it can't tell (no lists for the release's security pocket,
+     * lists apt keeps compressed, a list it can't read whole): Ubuntu's own
+     * count is sent instead, never a guess of 0.
+     */
+    private static function securityUpdates(): ?int
+    {
+        $release = self::keyValues((string) self::read('/etc/os-release'));
+        $codename = $release['VERSION_CODENAME'] ?? $release['UBUNTU_CODENAME'] ?? '';
+        $lists = preg_match('/^[a-z]{2,20}$/', $codename) === 1 ? self::securityLists($codename) : null;
+        if ($lists === null) {
+            return null;
+        }
+
+        /** @var array<string, string> $installed each installed package's version, by name and architecture */
+        $installed = [];
+        $whole = self::eachEntry(self::$root.self::PACKAGES, function (array $entry) use (&$installed): void {
+            // "install ok installed", or "hold ok installed": not removed, half-installed or only configured.
+            if (str_ends_with($entry['Status'] ?? '', ' installed')) {
+                $installed["{$entry['Package']}:{$entry['Architecture']}"] = $entry['Version'];
+            }
+        });
+        if (! $whole || $installed === []) {
+            return null;
+        }
+
+        /** @var array<string, true> $behind installed packages with a newer version in the security pocket */
+        $behind = [];
+        foreach ($lists as $list) {
+            $whole = self::eachEntry($list, function (array $entry) use ($installed, &$behind): void {
+                $key = "{$entry['Package']}:{$entry['Architecture']}";
+                if (isset($installed[$key]) && DebianVersion::compare($entry['Version'], $installed[$key]) > 0) {
+                    $behind[$key] = true;
+                }
+            });
+            if (! $whole) {
+                return null;
+            }
+        }
+
+        return count($behind);
+    }
+
+    /**
+     * The release's security pocket's package lists, one per component and
+     * architecture, from Ubuntu's own archive: its Release file says
+     * `Origin: Ubuntu`, whichever mirror served it. Null when there are
+     * none, or apt keeps them compressed (Docker's Ubuntu images do), since
+     * reading those would take a command or an extension.
+     *
+     * @return non-empty-list<string>|null
+     */
+    private static function securityLists(string $codename): ?array
+    {
+        $pocket = "_dists_{$codename}-security_";
+        $paths = @glob(self::$root.self::APT_LISTS.'/*'.$pocket.'*');
+        if (! is_array($paths)) {
+            return null;
+        }
+
+        $lists = [];
+        foreach ($paths as $path) {
+            if (preg_match('/^(.+'.preg_quote($pocket, '/').')[a-z0-9-]+_binary-[a-z0-9]+_Packages(.*)$/', basename($path), $match) !== 1) {
+                continue;
+            }
+            if ($match[2] !== '') {
+                return null;
+            }
+            if (self::fromUbuntu(dirname($path).'/'.$match[1])) {
+                $lists[] = $path;
+            }
+        }
+
+        return $lists === [] ? null : $lists;
+    }
+
+    /**
+     * Whether a source's Release file, saved beside its lists, says it's
+     * Ubuntu's archive. The field is near the top, inside the 64 KB read.
+     */
+    private static function fromUbuntu(string $release): bool
+    {
+        foreach (['InRelease', 'Release'] as $file) {
+            $contents = self::readPath($release.$file);
+            if ($contents !== null) {
+                return preg_match('/^Origin: Ubuntu$/m', $contents) === 1;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Calls $each with every entry of a list in the format dpkg and apt
+     * share (a field a line, an empty line between entries) that names a
+     * package, its architecture and its version, with those fields and its
+     * status. It reads a few megabytes at a time, whole entries only.
+     *
+     * False when it couldn't read the whole file, or the file changed while
+     * it read (apt writes a new list beside the old and moves it into
+     * place): a count from part of a list could leave a package out.
+     *
+     * @param  callable(array{Package: string, Architecture: string, Version: string, Status?: string}): void  $each
+     */
+    private static function eachEntry(string $path, callable $each): bool
+    {
+        $file = fn (): array => [@fileinode($path), @filesize($path), @filemtime($path)];
+        clearstatcache(true, $path);
+        if (! @is_file($path) || ! @is_readable($path)) {
+            return false;
+        }
+        $before = $file();
+        $size = $before[1];
+        if (in_array(false, $before, true) || ! is_int($size) || $size > self::LIST_MAX_BYTES) {
+            return false;
+        }
+
+        $rest = '';
+        for ($offset = 0; $offset < $size; $offset += self::LIST_CHUNK_BYTES) {
+            $chunk = @file_get_contents($path, offset: $offset, length: self::LIST_CHUNK_BYTES);
+            if ($chunk === false || $chunk === '') {
+                return false;
+            }
+
+            $text = $rest.$chunk;
+            $end = $offset + self::LIST_CHUNK_BYTES >= $size ? strlen($text) : strrpos($text, "\n\n");
+            if ($end === false) {
+                $rest = $text;
+
+                continue;
+            }
+
+            self::entries(substr($text, 0, $end), $each);
+            $rest = substr($text, $end + 2);
+        }
+
+        clearstatcache(true, $path);
+
+        return $file() === $before;
+    }
+
+    /**
+     * @param  callable(array{Package: string, Architecture: string, Version: string, Status?: string}): void  $each
+     */
+    private static function entries(string $text, callable $each): void
+    {
+        preg_match_all('/^(Package|Architecture|Version|Status): *(\S.*?) *$/m', $text, $fields, PREG_SET_ORDER);
+
+        /** @var array<string, string> $entry */
+        $entry = [];
+        $done = function () use (&$entry, $each): void {
+            if (isset($entry['Package'], $entry['Architecture'], $entry['Version'])) {
+                $each($entry);
+            }
+            $entry = [];
+        };
+
+        foreach ($fields as [, $field, $value]) {
+            // Every entry starts with its package's name.
+            if ($field === 'Package') {
+                $done();
+            }
+            $entry[$field] = $value;
+        }
+        $done();
     }
 
     /**
