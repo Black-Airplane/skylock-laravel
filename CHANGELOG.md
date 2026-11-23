@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1
+
+A minute report killed part-way, by a deploy or a restart, no longer stops the next four. Update from 0.6.0 before anything else.
+
+- **The scheduler's lock on the minute report lasts a minute, not five.** A report a deploy or restart kills never gives its lock back. Before 0.6 a report took a second or two, so that was rare; from 0.6.0 it waits up to 39 seconds for the app's own second of the minute, so a deploy would often catch one waiting. The next four reports were then skipped, and SkyLock calls an app that has been silent for three minutes down. Now a killed report costs one minute's report. The five minutes were there so a report stuck on a check that never answers (a database that hangs) couldn't start another every minute; that can now happen once a minute instead of once every five, until the check answers.
+- **The minute report is done by 54 seconds past the minute.** Each request after the health report waits only for the time left of the 15 seconds the report has from its second (10 at most), so one report never runs into the next.
+
 ## 0.6.0
 
 The scheduler no longer waits on SkyLock, and a task event that doesn't get through is sent the next minute instead of being lost.
