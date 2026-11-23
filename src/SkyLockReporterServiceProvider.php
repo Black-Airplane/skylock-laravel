@@ -18,8 +18,8 @@ use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Queue\Events\JobProcessed;
 use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Queue\Events\JobTimedOut;
+use Illuminate\Queue\Queue;
 use Illuminate\Support\Facades\Event as Events;
-use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 
 class SkyLockReporterServiceProvider extends ServiceProvider
@@ -91,6 +91,9 @@ class SkyLockReporterServiceProvider extends ServiceProvider
     {
         $runs = fn (): QueuedRuns => $this->app->make(QueuedRuns::class);
 
+        // Static on the queue base class: through the facade, on Laravel 12 and
+        // 13 before 13.30, it would open the default connection while providers
+        // boot, before an app provider has registered that connection's driver.
         Queue::createPayloadUsing(fn () => $runs()->payload());
 
         Events::listen(JobProcessing::class, fn (JobProcessing $event) => $runs()->jobProcessing($event->job));
