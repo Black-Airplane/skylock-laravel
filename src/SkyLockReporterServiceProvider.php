@@ -55,8 +55,9 @@ class SkyLockReporterServiceProvider extends ServiceProvider
 
         // The report every minute doubles as proof the scheduler is running.
         // Overlap protection stays: a check on a database that hangs has no timeout.
+        // It waits for this app's own second of the minute before it sends (--spread).
         $this->callAfterResolving(Schedule::class, function (Schedule $schedule): void {
-            NightwatchSampling::task($schedule->command('skylock:report')->everyMinute()->runInBackground()->withoutOverlapping(5));
+            NightwatchSampling::task($schedule->command('skylock:report --spread')->everyMinute()->runInBackground()->withoutOverlapping(5));
         });
 
         // Each report runs in its own process, which Nightwatch samples at its

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0
+
+The scheduler no longer waits on SkyLock, and a task event that doesn't get through is sent the next minute instead of being lost.
+
+- **Task events are noted, then sent with the minute report.** A task's start, finish, failure or skip was a request to SkyLock from inside `schedule:run`, before and after every task, waited on: about a second each when SkyLock was busy, up to the three-second timeout, and lost when it didn't get through. That's how a quick restart of SkyLock could make a client's task look late. The reporter now adds a line to a file on the server (beside the one it already keeps, readable by the app's own user alone) and the scheduler carries on. The minute report sends what was noted, oldest first, in batches of up to 100, and what doesn't get through waits for the next report, for up to two days. Each event carries a random id so SkyLock records it once if a batch comes twice. What queued work did goes in the same batches, after the scheduler's.
+- **Each app reports at its own second of the minute.** Every app's scheduler starts the minute report at the top of the minute, so SkyLock heard from all of them within the same few seconds, and on November 23, 2026 some reports didn't get through. The report now waits for a second between 5 and 39 past the minute, worked out from the token, before it sends anything. The scheduler runs it with `--spread`; `php artisan skylock:report` by hand sends straight away.
+- **The minute report gives SkyLock ten seconds to answer.** Nothing waits on it. Task events still sent from the scheduler (see below) keep the three-second `timeout`.
+- **Only while SkyLock takes batches.** SkyLock says so in its answer to every minute report; until it has, and if it ever stops, task events are sent from the scheduler as before. So is anything when the file can't be written.
+- SkyLock takes batches from November 23, 2026.
+
 ## 0.5.3
 
 Setting a token can no longer stop an app's artisan commands.

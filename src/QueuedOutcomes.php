@@ -14,8 +14,10 @@ use Throwable;
  * job: a few hundred milliseconds on every run of a frequent task, up to the
  * timeout when SkyLock was slow, all of it counted as the job's own time. The
  * report runs every minute in a process of its own. SkyLock judges a task late
- * by when it next starts, which the scheduler still sends as it happens, so a
- * finish or failure arriving within the minute changes nothing it decides.
+ * by when it next starts, which reaches it within the minute too, so a finish
+ * or failure arriving within the minute changes nothing it decides. Since
+ * 0.6 the report sends them in the same batches as the scheduler's events,
+ * after those, since they finish runs the scheduler started.
  *
  * Workers and the report share the list under a cache lock. A store without
  * locks gets the old behavior: the worker sends straight away.
@@ -51,28 +53,30 @@ final class QueuedOutcomes
     }
 
     /**
-     * Sends what the workers noted, oldest first. What SkyLock doesn't take
-     * waits for the next report.
+     * Takes what the workers noted, oldest first, for the minute report to
+     * send in its batches (SkyLock 0.6 and later): from here on they wait on
+     * the report's server like the scheduler's own events. Empty when there's
+     * nothing, or the lock can't be had: they wait in the cache for the next
+     * report.
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function take(): array
+    {
+        return array_map(
+            fn (array $outcome): array => TaskEvents::noted($outcome['key'], $outcome['event'], $outcome['durationMs']),
+            $this->taken(),
+        );
+    }
+
+    /**
+     * Sends what the workers noted, one at a time, oldest first, to a
+     * SkyLock that doesn't take batches. What it doesn't take waits for the
+     * next report.
      */
     public function send(): void
     {
-        try {
-            // The one cache read a minute when there's nothing to send.
-            if ($this->pending() === []) {
-                return;
-            }
-        } catch (Throwable) {
-            return;
-        }
-
-        $outcomes = [];
-        $taken = $this->locked(function () use (&$outcomes): void {
-            $outcomes = $this->pending();
-            $this->cache->forget(self::CACHE_KEY);
-        });
-        if (! $taken) {
-            return;
-        }
+        $outcomes = $this->taken();
 
         foreach ($outcomes as $i => $outcome) {
             if (! $this->events->sendForQueuedWork($outcome['key'], $outcome['event'], $outcome['durationMs'])) {
@@ -81,6 +85,31 @@ final class QueuedOutcomes
                 return;
             }
         }
+    }
+
+    /**
+     * What's waiting, taken out of the cache under its lock.
+     *
+     * @return list<array{key: string, event: 'finished'|'failed', durationMs: int|null}>
+     */
+    private function taken(): array
+    {
+        try {
+            // The one cache read a minute when there's nothing to send.
+            if ($this->pending() === []) {
+                return [];
+            }
+        } catch (Throwable) {
+            return [];
+        }
+
+        $outcomes = [];
+        $taken = $this->locked(function () use (&$outcomes): void {
+            $outcomes = $this->pending();
+            $this->cache->forget(self::CACHE_KEY);
+        });
+
+        return $taken ? $outcomes : [];
     }
 
     /**
