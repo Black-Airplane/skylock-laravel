@@ -293,3 +293,25 @@ it('spreads apps across the minute, each always at the same second', function ()
         ->and($seconds->countBy()->min())->toBeGreaterThan(50)
         ->and(ReportCommand::second(TOKEN))->toBe(ReportCommand::second(TOKEN));
 });
+
+it('lets the next minute’s report run when a deploy killed one while it waited', function () {
+    $report = collect(app(Schedule::class)->events())->first(fn (Event $event): bool => ScheduledTasks::isOwn($event));
+
+    // Killed part-way: it never got to give its lock back. The scheduler runs a task only if it takes the lock.
+    expect($report->mutex->create($report))->toBeTrue()
+        ->and($report->mutex->create($report))->toBeFalse();
+
+    $this->travel(61)->seconds();
+    expect($report->mutex->create($report))->toBeTrue();
+});
+
+it('gives each request after the health report only the time that’s left, so a report is done by 54 past the minute', function () {
+    $doneBy = now()->addSeconds(ReportCommand::DONE_WITHIN_SECONDS);
+
+    expect(ReportCommand::timeoutBefore($doneBy))->toBe(ReportCommand::TIMEOUT);
+    $this->travel(8)->seconds();
+    expect(ReportCommand::timeoutBefore($doneBy))->toBe(7);
+    $this->travel(10)->seconds();
+    expect(ReportCommand::timeoutBefore($doneBy))->toBe(1)
+        ->and(ReportCommand::SPREAD_FROM + ReportCommand::SPREAD_SECONDS - 1 + ReportCommand::DONE_WITHIN_SECONDS)->toBe(54);
+});

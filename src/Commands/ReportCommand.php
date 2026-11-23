@@ -37,8 +37,15 @@ class ReportCommand extends Command
     /** Nothing waits on the report, so SkyLock gets longer to answer it than a task event sent from the scheduler. */
     public const TIMEOUT = 10;
 
-    /** What follows the health report starts within this long of it, so a report ends before the next minute's starts. */
+    /** What follows the health report starts within this long of it, */
     public const SEND_FOR_SECONDS = 10;
+
+    /**
+     * and everything is done within this long: by 54 seconds past the minute,
+     * so one report never runs into the next, which the scheduler's lock
+     * (a minute, see the service provider) doesn't stop.
+     */
+    public const DONE_WITHIN_SECONDS = 15;
 
     public function handle(SkyLockClient $client, HealthChecks $checks, Schedule $schedule, QueuedOutcomes $outcomes, TaskEvents $events): int
     {
@@ -57,6 +64,7 @@ class ReportCommand extends Command
             $this->waitForOwnSecond();
         }
         $until = Date::now()->addSeconds(self::SEND_FOR_SECONDS);
+        $doneBy = Date::now()->addSeconds(self::DONE_WITHIN_SECONDS);
 
         $read = self::stack();
         $response = $client->send('POST', 'health', [
@@ -75,9 +83,9 @@ class ReportCommand extends Command
         // and read again first when someone has asked SkyLock to check now.
         if ($response !== null && Date::now()->lessThan($until) && ($response['refreshStack'] ?? false) === true) {
             $read = self::stack(fresh: true);
-            $client->send('PUT', 'stack', self::stackPayload($read), timeout: self::TIMEOUT);
+            $client->send('PUT', 'stack', self::stackPayload($read), timeout: self::timeoutBefore($doneBy));
         } elseif ($response !== null && Date::now()->lessThan($until) && ($response['stackKnown'] ?? true) !== true) {
-            $client->send('PUT', 'stack', self::stackPayload($read), timeout: self::TIMEOUT);
+            $client->send('PUT', 'stack', self::stackPayload($read), timeout: self::timeoutBefore($doneBy));
         }
 
         // Send the schedule when it changed, or when SkyLock doesn't have it yet. Before the task
@@ -85,7 +93,7 @@ class ReportCommand extends Command
         $tasks = ScheduledTasks::all($schedule);
         $hash = sha1((string) json_encode($tasks));
         if ($response !== null && Date::now()->lessThan($until) && (($response['scheduleKnown'] ?? false) !== true || LocalState::get('schedule') !== $hash)) {
-            if ($client->send('PUT', 'schedule', ['tasks' => $tasks], timeout: self::TIMEOUT) !== null) {
+            if ($client->send('PUT', 'schedule', ['tasks' => $tasks], timeout: self::timeoutBefore($doneBy)) !== null) {
                 LocalState::put('schedule', $hash);
             }
         }
@@ -93,7 +101,7 @@ class ReportCommand extends Command
         // What scheduled tasks did since the last report. While SkyLock can't
         // be reached it waits for the next one.
         if ($response !== null) {
-            $this->sendTaskEvents($events, $outcomes, $batches, $until);
+            $this->sendTaskEvents($events, $outcomes, $batches, $until, $doneBy);
         }
 
         return self::SUCCESS;
@@ -107,6 +115,15 @@ class ReportCommand extends Command
     public static function second(string $token): int
     {
         return self::SPREAD_FROM + (int) hexdec(substr(hash('sha256', 'skylock-report-second|'.$token), 0, 7)) % self::SPREAD_SECONDS;
+    }
+
+    /**
+     * How long a request after the health report may wait for SkyLock: what's
+     * left until the report must be done, and never more than TIMEOUT.
+     */
+    public static function timeoutBefore(Carbon $doneBy): int
+    {
+        return max(1, min(self::TIMEOUT, (int) floor(Date::now()->diffInSeconds($doneBy, false))));
     }
 
     private function waitForOwnSecond(): void
@@ -123,7 +140,7 @@ class ReportCommand extends Command
      * is kept on the server for the next report; a batch SkyLock read and
      * refused would be refused again, so it isn't.
      */
-    private function sendTaskEvents(TaskEvents $events, QueuedOutcomes $outcomes, bool $batches, Carbon $until): void
+    private function sendTaskEvents(TaskEvents $events, QueuedOutcomes $outcomes, bool $batches, Carbon $until, Carbon $doneBy): void
     {
         $noted = LocalState::takeNoted();
 
@@ -144,7 +161,7 @@ class ReportCommand extends Command
 
         $waiting = [...$noted, ...$outcomes->take()];
         foreach (array_chunk($waiting, TaskEvents::BATCH) as $i => $batch) {
-            if (! Date::now()->lessThan($until) || $events->sendBatch($batch, self::TIMEOUT) === 'failed') {
+            if (! Date::now()->lessThan($until) || $events->sendBatch($batch, self::timeoutBefore($doneBy)) === 'failed') {
                 LocalState::keepNoted(array_slice($waiting, $i * TaskEvents::BATCH));
 
                 return;
